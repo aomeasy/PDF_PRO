@@ -97,45 +97,61 @@ def create_pdf_with_content(text, font_name, font_size, image=None, image_positi
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
     
-    # ลงทะเบียนฟอนต์ (ต้องมีไฟล์ฟอนต์)
-    try:
-        if font_name == "TH Sarabun PSK":
-            pdfmetrics.registerFont(TTFont('THSarabunPSK', 'fonts/THSarabunPSK.ttf'))
-            c.setFont('THSarabunPSK', font_size)
-        elif font_name == "TH Sarabun New":
-            pdfmetrics.registerFont(TTFont('THSarabunNew', 'fonts/THSarabunNew.ttf'))
-            c.setFont('THSarabunNew', font_size)
-        else:
-            c.setFont('Helvetica', font_size)
-    except:
+    # ตั้งค่าฟอนต์
+    font_set = False
+    if FONTS_AVAILABLE and font_name in ["TH Sarabun PSK", "TH Sarabun New"]:
+        try:
+            font_file_map = {
+                "TH Sarabun PSK": ("THSarabunPSK", "fonts/THSarabunPSK.ttf"),
+                "TH Sarabun New": ("THSarabunNew", "fonts/THSarabunNew.ttf")
+            }
+            
+            if font_name in font_file_map:
+                font_id, font_path = font_file_map[font_name]
+                if os.path.exists(font_path):
+                    pdfmetrics.registerFont(TTFont(font_id, font_path))
+                    c.setFont(font_id, font_size)
+                    font_set = True
+                else:
+                    st.warning(f"ไม่พบไฟล์ฟอนต์ {font_path}")
+        except Exception as e:
+            st.warning(f"ไม่สามารถโหลดฟอนต์ {font_name} ได้: {str(e)}")
+    
+    # ใช้ฟอนต์เริ่มต้นถ้าตั้งค่าฟอนต์ไม่สำเร็จ
+    if not font_set:
         c.setFont('Helvetica', font_size)
-        st.warning("ไม่พบไฟล์ฟอนต์ ใช้ฟอนต์เริ่มต้นแทน")
+        if font_name != "Helvetica":
+            st.info("ใช้ฟอนต์เริ่มต้น (Helvetica) แทน")
     
     # เขียนข้อความ
-    text_object = c.beginText(50, height - 100)
-    for line in text.split('\n'):
-        text_object.textLine(line)
-    c.drawText(text_object)
+    if text:
+        text_object = c.beginText(50, height - 100)
+        for line in text.split('\n'):
+            text_object.textLine(line)
+        c.drawText(text_object)
     
     # เพิ่มรูปภาพ
     if image is not None:
-        img = Image.open(image)
-        img_width, img_height = img.size
-        
-        # ปรับขนาดรูปภาพ
-        max_width = 400
-        max_height = 400
-        ratio = min(max_width/img_width, max_height/img_height)
-        new_width = img_width * ratio
-        new_height = img_height * ratio
-        
-        if image_position:
-            x, y = image_position
-        else:
-            x, y = 50, height - 300
-        
-        c.drawImage(ImageReader(image), x, y - new_height, 
-                   width=new_width, height=new_height)
+        try:
+            img = Image.open(image)
+            img_width, img_height = img.size
+            
+            # ปรับขนาดรูปภาพ
+            max_width = 400
+            max_height = 400
+            ratio = min(max_width/img_width, max_height/img_height)
+            new_width = img_width * ratio
+            new_height = img_height * ratio
+            
+            if image_position:
+                x, y = image_position
+            else:
+                x, y = 50, height - 300
+            
+            c.drawImage(ImageReader(image), x, y - new_height, 
+                       width=new_width, height=new_height)
+        except Exception as e:
+            st.error(f"เกิดข้อผิดพลาดในการเพิ่มรูปภาพ: {str(e)}")
     
     c.save()
     buffer.seek(0)
@@ -154,6 +170,94 @@ def rotate_pdf(pdf_file, rotation_angle):
     writer.write(output)
     output.seek(0)
     return output
+
+# ฟังก์ชันสำหรับแก้ไข PDF (เพิ่ม text overlay)
+def edit_pdf_with_text(pdf_file, page_number, text_elements):
+    """
+    แก้ไข PDF โดยเพิ่ม text overlay บนหน้าที่เลือก
+    
+    Args:
+        pdf_file: ไฟล์ PDF ต้นฉบับ
+        page_number: หมายเลขหน้าที่ต้องการแก้ไข (1-indexed)
+        text_elements: list ของ dict ที่มี {text, x, y, font_size, font_name}
+    
+    Returns:
+        BytesIO: PDF ที่แก้ไขแล้ว
+    """
+    # อ่าน PDF ต้นฉบับ
+    reader = PdfReader(pdf_file)
+    writer = PdfWriter()
+    
+    # สร้าง overlay สำหรับหน้าที่ต้องการแก้ไข
+    packet = io.BytesIO()
+    can = canvas.Canvas(packet, pagesize=A4)
+    width, height = A4
+    
+    # เพิ่ม text elements
+    for element in text_elements:
+        text = element.get('text', '')
+        x = element.get('x', 50)
+        y = element.get('y', 700)
+        font_size = element.get('font_size', 12)
+        font_name = element.get('font_name', 'Helvetica')
+        
+        # ตั้งค่าฟอนต์
+        font_set = False
+        if FONTS_AVAILABLE and font_name in ["TH Sarabun PSK", "TH Sarabun New"]:
+            try:
+                font_file_map = {
+                    "TH Sarabun PSK": ("THSarabunPSK", "fonts/THSarabunPSK.ttf"),
+                    "TH Sarabun New": ("THSarabunNew", "fonts/THSarabunNew.ttf")
+                }
+                
+                if font_name in font_file_map:
+                    font_id, font_path = font_file_map[font_name]
+                    if os.path.exists(font_path):
+                        pdfmetrics.registerFont(TTFont(font_id, font_path))
+                        can.setFont(font_id, font_size)
+                        font_set = True
+            except:
+                pass
+        
+        if not font_set:
+            can.setFont('Helvetica', font_size)
+        
+        # แปลง y coordinate (PDF ใช้ bottom-left เป็น origin)
+        y_pdf = height - y
+        can.drawString(x, y_pdf, text)
+    
+    can.save()
+    packet.seek(0)
+    
+    # อ่าน overlay
+    overlay_pdf = PdfReader(packet)
+    overlay_page = overlay_pdf.pages[0]
+    
+    # รวม overlay กับหน้าต้นฉบับ
+    for i, page in enumerate(reader.pages):
+        if i == page_number - 1:  # หน้าที่ต้องการแก้ไข
+            page.merge_page(overlay_page)
+        writer.add_page(page)
+    
+    # สร้าง output
+    output = io.BytesIO()
+    writer.write(output)
+    output.seek(0)
+    return output
+
+# ฟังก์ชันสำหรับแปลง PDF เป็นรูปภาพ (สำหรับแสดงผล)
+def pdf_page_to_image(pdf_file, page_number):
+    """แปลงหน้า PDF เป็นรูปภาพสำหรับแสดงผล"""
+    try:
+        from pdf2image import convert_from_bytes
+        images = convert_from_bytes(pdf_file.read(), first_page=page_number, last_page=page_number)
+        pdf_file.seek(0)
+        return images[0] if images else None
+    except ImportError:
+        return None
+    except Exception as e:
+        st.error(f"ไม่สามารถแสดง preview ได้: {str(e)}")
+        return None
 
 # ฟังก์ชันสำหรับลบหน้า PDF
 def delete_pages(pdf_file, pages_to_delete):
@@ -178,7 +282,7 @@ st.sidebar.title("เลือกฟังก์ชัน")
 feature = st.sidebar.radio(
     "คุณต้องการทำอะไร?",
     ["🔗 รวมไฟล์ PDF", "✂️ แบ่งไฟล์ PDF", "📋 ตัดหน้า PDF", 
-     "📝 สร้าง PDF ใหม่", "🔄 หมุน PDF", "🗑️ ลบหน้า PDF"]
+     "📝 สร้าง PDF ใหม่", "✏️ แก้ไข PDF", "🔄 หมุน PDF", "🗑️ ลบหน้า PDF"]
 )
 
 # 1. รวมไฟล์ PDF
@@ -338,7 +442,165 @@ elif feature == "📝 สร้าง PDF ใหม่":
         else:
             st.warning("กรุณาใส่ข้อความหรือรูปภาพอย่างน้อย 1 อย่าง")
 
-# 5. หมุน PDF
+# 5. แก้ไข PDF
+elif feature == "✏️ แก้ไข PDF":
+    st.header("แก้ไข PDF - เพิ่มข้อความบนหน้า PDF")
+    
+    uploaded_file = st.file_uploader("อัปโหลดไฟล์ PDF", type="pdf", key="edit")
+    
+    if uploaded_file:
+        reader = PdfReader(uploaded_file)
+        total_pages = len(reader.pages)
+        st.info(f"📄 ไฟล์นี้มี {total_pages} หน้า")
+        
+        # เลือกหน้าที่ต้องการแก้ไข
+        page_to_edit = st.number_input(
+            "เลือกหน้าที่ต้องการแก้ไข",
+            min_value=1,
+            max_value=total_pages,
+            value=1
+        )
+        
+        st.markdown("---")
+        st.subheader(f"แก้ไขหน้าที่ {page_to_edit}")
+        
+        # เก็บ text elements ใน session state
+        if 'text_elements' not in st.session_state:
+            st.session_state.text_elements = []
+        
+        # UI สำหรับเพิ่ม text
+        with st.expander("➕ เพิ่มข้อความใหม่", expanded=True):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                new_text = st.text_area(
+                    "ข้อความ",
+                    placeholder="พิมพ์ข้อความที่ต้องการเพิ่ม...",
+                    key="new_text_input"
+                )
+                
+                text_x = st.number_input("ตำแหน่ง X (แนวนอน)", 
+                                        min_value=0, max_value=600, value=50)
+                text_y = st.number_input("ตำแหน่ง Y (แนวตั้ง)", 
+                                        min_value=0, max_value=800, value=100)
+            
+            with col2:
+                text_font = st.selectbox(
+                    "ฟอนต์",
+                    ["Helvetica", "TH Sarabun PSK", "TH Sarabun New"],
+                    key="text_font_select"
+                )
+                
+                text_size = st.slider("ขนาดตัวอักษร", 8, 72, 12, key="text_size_slider")
+                
+                st.markdown("**ตัวอย่าง:**")
+                st.markdown(f"<p style='font-size: {text_size}px;'>{new_text if new_text else 'ตัวอย่างข้อความ'}</p>", 
+                           unsafe_allow_html=True)
+            
+            if st.button("➕ เพิ่มข้อความนี้", use_container_width=True):
+                if new_text:
+                    st.session_state.text_elements.append({
+                        'text': new_text,
+                        'x': text_x,
+                        'y': text_y,
+                        'font_size': text_size,
+                        'font_name': text_font,
+                        'page': page_to_edit
+                    })
+                    st.success("✅ เพิ่มข้อความแล้ว!")
+                    st.rerun()
+                else:
+                    st.warning("กรุณาใส่ข้อความ")
+        
+        # แสดงรายการ text elements ที่เพิ่มไว้
+        if st.session_state.text_elements:
+            st.markdown("---")
+            st.subheader("📝 ข้อความที่เพิ่มไว้")
+            
+            # กรอง elements ของหน้านี้
+            page_elements = [e for e in st.session_state.text_elements if e.get('page') == page_to_edit]
+            
+            if page_elements:
+                for i, element in enumerate(page_elements):
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    
+                    with col1:
+                        st.text(f"{i+1}. {element['text'][:50]}...")
+                        st.caption(f"ตำแหน่ง: ({element['x']}, {element['y']}) | "
+                                 f"ขนาด: {element['font_size']} | "
+                                 f"ฟอนต์: {element['font_name']}")
+                    
+                    with col2:
+                        if st.button("✏️", key=f"edit_{i}", help="แก้ไข"):
+                            st.info("ใช้ฟอร์มด้านบนเพื่อแก้ไข")
+                    
+                    with col3:
+                        if st.button("🗑️", key=f"delete_{i}", help="ลบ"):
+                            # หา index ใน list ทั้งหมด
+                            global_idx = st.session_state.text_elements.index(element)
+                            st.session_state.text_elements.pop(global_idx)
+                            st.rerun()
+            else:
+                st.info(f"ยังไม่มีข้อความในหน้า {page_to_edit}")
+            
+            st.markdown("---")
+            
+            # ปุ่มสร้าง PDF
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🔄 ล้างข้อความทั้งหมด", use_container_width=True):
+                    st.session_state.text_elements = []
+                    st.rerun()
+            
+            with col2:
+                if st.button("📥 สร้างและดาวน์โหลด PDF", 
+                           use_container_width=True, 
+                           type="primary"):
+                    with st.spinner("กำลังสร้าง PDF..."):
+                        # กรอง elements ตามหน้า
+                        elements_for_page = [e for e in st.session_state.text_elements 
+                                           if e.get('page') == page_to_edit]
+                        
+                        if elements_for_page:
+                            edited_pdf = edit_pdf_with_text(
+                                uploaded_file,
+                                page_to_edit,
+                                elements_for_page
+                            )
+                            
+                            st.success("✅ สร้าง PDF สำเร็จ!")
+                            st.download_button(
+                                label="📥 ดาวน์โหลดไฟล์ที่แก้ไขแล้ว",
+                                data=edited_pdf,
+                                file_name=f"edited_page_{page_to_edit}.pdf",
+                                mime="application/pdf"
+                            )
+                        else:
+                            st.warning("กรุณาเพิ่มข้อความอย่างน้อย 1 รายการ")
+        else:
+            st.info("👆 เพิ่มข้อความโดยใช้ฟอร์มด้านบน")
+        
+        # คำแนะนำการใช้งาน
+        with st.expander("💡 คำแนะนำการใช้งาน"):
+            st.markdown("""
+            **วิธีใช้งาน:**
+            1. เลือกหน้าที่ต้องการแก้ไข
+            2. ใส่ข้อความที่ต้องการเพิ่ม
+            3. ปรับตำแหน่ง X, Y (0,0 = มุมซ้ายบน)
+            4. เลือกฟอนต์และขนาด
+            5. คลิก "เพิ่มข้อความนี้"
+            6. เพิ่มข้อความได้หลายรายการ
+            7. คลิก "สร้างและดาวน์โหลด PDF"
+            
+            **เคล็ดลับ:**
+            - ตำแหน่ง X: 0-600 (ซ้าย-ขวา)
+            - ตำแหน่ง Y: 0-800 (บน-ล่าง)
+            - สามารถเพิ่มข้อความในหลายหน้าได้
+            - ใช้ฟอนต์ไทยสำหรับข้อความภาษาไทย
+            """)
+
+# 6. หมุน PDF
 elif feature == "🔄 หมุน PDF":
     st.header("หมุนหน้า PDF")
     uploaded_file = st.file_uploader("อัปโหลดไฟล์ PDF", type="pdf", key="rotate")
@@ -361,7 +623,7 @@ elif feature == "🔄 หมุน PDF":
                     mime="application/pdf"
                 )
 
-# 6. ลบหน้า PDF
+# 7. ลบหน้า PDF
 elif feature == "🗑️ ลบหน้า PDF":
     st.header("ลบหน้าที่ไม่ต้องการออกจาก PDF")
     uploaded_file = st.file_uploader("อัปโหลดไฟล์ PDF", type="pdf", key="delete")
