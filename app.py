@@ -100,15 +100,41 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
 
     pdf_base64 = base64.b64encode(pdf_bytes).decode() if pdf_bytes else ""
 
+    # ถ้ามีไฟล์ TTF ในโฟลเดอร์ fonts/ จะฝังเป็น @font-face ให้เบราว์เซอร์ใช้ได้ทันที
+    custom_font_css = ""
+    for fname in ["THSarabunPSK", "THSarabunNew"]:
+        fpath = os.path.join("fonts", f"{fname}.ttf")
+        if os.path.exists(fpath):
+            try:
+                with open(fpath, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                custom_font_css += f"""
+                @font-face {{
+                    font-family: '{fname}';
+                    src: url(data:font/ttf;base64,{b64}) format('truetype');
+                    font-weight: normal;
+                    font-style: normal;
+                    font-display: swap;
+                }}
+                """
+            except Exception:
+                pass
+
     html_code = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
+
+        <!-- โหลดเว็บฟอนต์ Sarabun สำหรับ fallback ของ THSarabun* -->
+        <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+
         <style>
+            {custom_font_css}
+
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{
-                font-family: 'Segoe UI', sans-serif;
+                font-family: 'Sarabun', 'Noto Sans Thai', Tahoma, sans-serif;
                 background: #f5f5f5;
                 padding: 20px;
             }}
@@ -155,19 +181,9 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
                 font-weight: 600;
                 transition: all 0.3s;
             }}
-            .btn-add {{
-                background: white;
-                color: #667eea;
-                width: 100%;
-                margin-top: 10px;
-            }}
+            .btn-add {{ background: white; color: #667eea; width: 100%; margin-top: 10px; }}
             .btn-add:hover {{ background: #f0f0f0; }}
-            .btn-save {{
-                background: #28a745;
-                color: white;
-                width: 100%;
-                margin-top: 10px;
-            }}
+            .btn-save {{ background: #28a745; color: white; width: 100%; margin-top: 10px; }}
             .btn-clear {{ background: #dc3545; color: white; width: 100%; }}
             .canvas-wrapper {{ padding: 20px; min-height: 600px; overflow: auto; }}
             #canvas {{
@@ -269,7 +285,19 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
                 return arr;
             }}
 
-            // โหลด PDF (หน้าแรก) ด้วย pdf.js
+            // ชื่อฟอนต์จากดรอปดาวน์ → CSS font-family stack ที่เบราว์เซอร์รู้จัก
+            const CSS_FONT_MAP = {{
+                "Helvetica": "Helvetica, Arial, sans-serif",
+                "Times-Roman": "'Times New Roman', Times, serif",
+                "Courier": "'Courier New', Courier, monospace",
+                "THSarabunPSK": "'THSarabunPSK','Sarabun','Noto Sans Thai',sans-serif",
+                "THSarabunNew": "'THSarabunNew','Sarabun','Noto Sans Thai',sans-serif"
+            }};
+            function cssFontFamily(name) {{
+                return CSS_FONT_MAP[name] || name;
+            }}
+
+            // โหลด PDF หน้าแรกด้วย pdf.js
             const pdfData = '{pdf_base64}';
             if (pdfData) {{
                 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -279,30 +307,20 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
                     return pdf.getPage(1).then((page) => {{
                         const canvas = document.getElementById('pdfCanvas');
                         const ctx = canvas.getContext('2d');
-
-                        // คำนวณสเกลให้พอดี 595x842
                         const unscaled = page.getViewport({{ scale: 1.0 }});
                         const scale = Math.min(595 / unscaled.width, 842 / unscaled.height);
                         const viewport = page.getViewport({{ scale }});
-
                         canvas.width = viewport.width;
                         canvas.height = viewport.height;
-
-                        const renderContext = {{
-                            canvasContext: ctx,
-                            viewport: viewport
-                        }};
+                        const renderContext = {{ canvasContext: ctx, viewport }};
                         return page.render(renderContext).promise;
                     }});
-                }}).catch(err => {{
-                    console.error('pdf.js error:', err);
-                }});
+                }}).catch(err => console.error('pdf.js error:', err));
             }}
 
             function addText() {{
                 const text = document.getElementById('textInput').value;
                 if (!text.trim()) {{ alert('กรุณาใส่ข้อความ'); return; }}
-
                 const element = {{
                     id: ++elementCounter,
                     text,
@@ -326,7 +344,7 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
                 div.style.left = el.x + 'px';
                 div.style.top = el.y + 'px';
                 div.style.fontSize = el.fontSize + 'px';
-                div.style.fontFamily = el.font;
+                div.style.fontFamily = cssFontFamily(el.font);
                 div.style.color = el.color;
                 div.textContent = el.text;
 
@@ -408,12 +426,32 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
                 }}
             }}
 
+            // อัปเดต element ที่กำลังเลือก เมื่อผู้ใช้เปลี่ยนฟอนต์/ขนาด/สี
+            const fontSelect = document.getElementById('fontSelect');
+            const fontSizeInput = document.getElementById('fontSize');
+            const textColorInput = document.getElementById('textColor');
+
+            fontSelect.addEventListener('change', () => {{
+                if (!selectedElement) return;
+                selectedElement.font = fontSelect.value;
+                const div = document.getElementById('text-' + selectedElement.id);
+                div.style.fontFamily = cssFontFamily(selectedElement.font);
+            }});
+            fontSizeInput.addEventListener('change', () => {{
+                if (!selectedElement) return;
+                const size = parseInt(fontSizeInput.value) || 16;
+                selectedElement.fontSize = size;
+                document.getElementById('text-' + selectedElement.id).style.fontSize = size + 'px';
+            }});
+            textColorInput.addEventListener('change', () => {{
+                if (!selectedElement) return;
+                selectedElement.color = textColorInput.value;
+                document.getElementById('text-' + selectedElement.id).style.color = selectedElement.color;
+            }});
+
             function savePDF() {{
                 if (textElements.length === 0) {{ alert('กรุณาเพิ่มข้อความก่อน'); return; }}
-                window.parent.postMessage({{
-                    type: 'pdf_data',
-                    elements: textElements
-                }}, '*');
+                window.parent.postMessage({{ type: 'pdf_data', elements: textElements }}, '*');
                 alert('✅ บันทึกข้อมูลสำเร็จ! กรุณากดปุ่ม "สร้าง PDF" ด้านล่าง');
             }}
         </script>
@@ -421,6 +459,7 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
     </html>
     """
     components.html(html_code, height=1000, scrolling=True)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Main App
