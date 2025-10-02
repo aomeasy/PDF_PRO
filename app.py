@@ -7,6 +7,7 @@ import io
 import json
 import base64
 import os
+from string import Template
 
 # ------------------------------------------------------------
 # Fonts for ReportLab (server-side PDF generation)
@@ -100,18 +101,24 @@ html, body { background: var(--bg); }
 }
 .text-element:hover .resize-handle{ display:block; }
 
-/* Inputs on toolbar inside component */
+/* Toolbars */
 .toolbar{
-  display:grid; grid-template-columns: 1fr 150px 120px 120px 1fr;
+  display:grid; grid-template-columns: 1fr 140px 120px 120px 1fr;
   gap:10px; align-items:center; margin-bottom:10px;
 }
 .toolbar textarea, .toolbar select, .toolbar input[type="number"], .toolbar input[type="color"]{
   border:1px solid var(--border); border-radius:10px; padding:10px; font-size:14px; background:#fff;
 }
 .toolbar textarea{ grid-column: 1 / 6; min-height:60px; resize:vertical; }
-.zoom-controls{ display:flex; gap:8px; align-items:center; justify-content:flex-end; }
+
+/* Zoom + pager */
+.controls-row{ display:flex; gap:10px; align-items:center; justify-content:space-between; margin-top:8px; }
+.zoom-controls{ display:flex; gap:8px; align-items:center; }
 .zoom-btn{ border:1px solid var(--border); background:#fff; border-radius:8px; padding:8px 10px; cursor:pointer; }
 .zoom-value{ color:var(--muted); min-width:56px; text-align:center; font-weight:700; }
+.pager{ display:flex; gap:8px; align-items:center; }
+.pager button{ border:1px solid var(--border); background:#fff; border-radius:8px; padding:8px 10px; cursor:pointer; }
+.pager select{ border:1px solid var(--border); border-radius:8px; padding:8px 10px; background:#fff; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -179,11 +186,12 @@ def edit_pdf_with_elements(pdf_bytes: bytes, text_elements):
     return out
 
 # ------------------------------------------------------------
-# Interactive editor component
-# - ส่ง elements กลับทุกครั้งที่ "mouse up" หรือมีการแก้ไข -> Streamlit จะสร้าง PDF ให้เอง
-# - มี Zoom 50–200% (default 125%)
+# Interactive editor component (no f-string → no brace-escape issues)
+# - Zoom 50–200%
+# - Page picker (Prev/Next/Dropdown)
+# - Auto post to Streamlit on every change
 # ------------------------------------------------------------
-def interactive_pdf_editor(pdf_bytes: bytes | None = None):
+def interactive_pdf_editor(pdf_bytes: bytes, total_pages: int):
     pdf_base64 = base64.b64encode(pdf_bytes).decode() if pdf_bytes else ""
 
     # embed Thai fonts for browser preview (optional)
@@ -204,19 +212,20 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
             except Exception:
                 pass
 
-    html = f"""
+    html_template = Template("""
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="UTF-8">
       <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
       <style>
-        {custom_font_css}
+        $CUSTOM_FONT_CSS
       </style>
     </head>
     <body>
       <div class="card" style="margin-top:8px;">
         <div class="section-title">Interactive Editor</div>
+
         <div class="toolbar">
           <textarea id="textInput" placeholder="พิมพ์ข้อความที่ต้องการเพิ่ม..."></textarea>
           <select id="fontSelect">
@@ -228,6 +237,15 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
           </select>
           <input type="number" id="fontSize" value="16" min="8" max="72">
           <input type="color" id="textColor" value="#111111">
+        </div>
+
+        <div class="controls-row">
+          <div class="pager">
+            <button id="prevPage">⟨ Prev</button>
+            <select id="pageSelect"></select>
+            <button id="nextPage">Next ⟩</button>
+            <span id="pageInfo" style="color:#64748b"></span>
+          </div>
           <div class="zoom-controls">
             <button class="zoom-btn" id="zoomOut">−</button>
             <div class="zoom-value" id="zoomVal">125%</div>
@@ -237,7 +255,7 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
         </div>
 
         <div class="canvas-wrap">
-          <div class="viewport" id="viewport" style="width: 744px; height: 1053px;">
+          <div class="viewport" id="viewport" style="width: 820px; height: 1120px;">
             <div id="page">
               <canvas id="pdfCanvas" width="595" height="842"></canvas>
             </div>
@@ -253,30 +271,38 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
       <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
       <script>
         // --- helpers ---
-        const CSS_FONT_MAP = {{
+        const CSS_FONT_MAP = {
           "Helvetica":"Helvetica, Arial, sans-serif",
           "Times-Roman":"'Times New Roman', Times, serif",
           "Courier":"'Courier New', Courier, monospace",
           "THSarabunPSK":"'THSarabunPSK','Sarabun','Noto Sans Thai',sans-serif",
           "THSarabunNew":"'THSarabunNew','Sarabun','Noto Sans Thai',sans-serif"
-        }};
-        function cssFontFamily(n){{ return CSS_FONT_MAP[n] || n; }}
-        function base64ToUint8Array(b64){{ const r=atob(b64); const a=new Uint8Array(r.length); for(let i=0;i<r.length;i++) a[i]=r.charCodeAt(i); return a; }}
+        };
+        function cssFontFamily(n){ return CSS_FONT_MAP[n] || n; }
+        function base64ToUint8Array(b64){ const r=atob(b64); const a=new Uint8Array(r.length); for(let i=0;i<r.length;i++) a[i]=r.charCodeAt(i); return a; }
 
         // base page size in px (A4 @ ~72dpi)
         const BASE_W = 595, BASE_H = 842;
 
         // state
-        let textElements = [];
+        let textElements = [];           // all pages
         let elementCounter = 0;
         let selectedElement = null, isDragging=false, isResizing=false, startX, startY, startLeft, startTop, startFontSize;
-        let currentZoom = 1.25; // default 125%
+        let currentZoom = 1.25;          // default 125%
+        let currentPageNo = 1;
+        const totalPages = $TOTAL_PAGES;
 
         // DOM
         const page   = document.getElementById('page');
         const view   = document.getElementById('viewport');
         const canvas = document.getElementById('pdfCanvas');
         const ctx    = canvas.getContext('2d');
+
+        // populate page selector
+        const pageSelect = document.getElementById('pageSelect');
+        for(let i=1;i<=totalPages;i++){ const opt=document.createElement('option'); opt.value=String(i); opt.textContent='Page '+i; pageSelect.appendChild(opt); }
+        pageSelect.value='1';
+        const pageInfo = document.getElementById('pageInfo');
 
         // zoom controls
         const zoomRange = document.getElementById('zoomRange');
@@ -285,8 +311,8 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
         const zoomVal   = document.getElementById('zoomVal');
         function applyZoom(){
           page.style.transform = 'scale(' + currentZoom + ')';
-          view.style.width  = (BASE_W * currentZoom + 150) + 'px';   // give some space
-          view.style.height = (BASE_H * currentZoom + 150) + 'px';
+          view.style.width  = (BASE_W * currentZoom + 180) + 'px';
+          view.style.height = (BASE_H * currentZoom + 180) + 'px';
           zoomVal.textContent = Math.round(currentZoom*100) + '%';
         }
         function setZoomFromRange(v){ currentZoom = parseInt(v,10)/100; applyZoom(); }
@@ -295,34 +321,52 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
         zoomOut.addEventListener('click', ()=>{ let v = Math.max(50,  parseInt(zoomRange.value,10)-10); zoomRange.value=v; setZoomFromRange(v); });
         applyZoom();
 
-        // load PDF page 1
-        const pdfData = '{pdf_base64}';
+        // load full PDF
+        let pdfDoc = null;
+        const pdfData = '$PDF_BASE64';
         if(pdfData){
           pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
           const uint8 = base64ToUint8Array(pdfData);
-          pdfjsLib.getDocument({data:uint8}).promise.then(pdf => pdf.getPage(1)).then(pagePDF=>{
-            const unscaled = pagePDF.getViewport({scale:1});
-            const scale = Math.min(BASE_W/unscaled.width, BASE_H/unscaled.height);
-            const viewport = pagePDF.getViewport({scale});
-            canvas.width = viewport.width; canvas.height = viewport.height;
-            return pagePDF.render({canvasContext:ctx, viewport}).promise;
+          pdfjsLib.getDocument({data:uint8}).promise.then(pdf => {
+            pdfDoc = pdf;
+            renderPage(currentPageNo);
           }).catch(err=>console.error('pdf.js error', err));
         }
 
-        // --- editor interactions ---
+        function renderPage(n){
+          pageInfo.textContent = '(หน้า ' + n + ' จาก ' + totalPages + ')';
+          pdfDoc.getPage(n).then(pagePDF=>{
+            const unscaled = pagePDF.getViewport({scale:1});
+            const scale = Math.min(BASE_W/unscaled.width, BASE_H/unscaled.height);
+            const viewport = pagePDF.getViewport({scale: scale});
+            canvas.width = viewport.width; canvas.height = viewport.height;
+            pagePDF.render({canvasContext:ctx, viewport}).promise.then(()=>{
+              rebuildTextLayer();
+            });
+          });
+        }
+
+        function rebuildTextLayer(){
+          // remove existing text nodes
+          document.querySelectorAll('#page .text-element').forEach(d => d.remove());
+          // add current page elements
+          textElements.filter(x => (x.page||1)===currentPageNo).forEach(createTextDiv);
+        }
+
+        // editor interactions
         document.getElementById('addBtn').addEventListener('click', addText);
-        document.getElementById('clearBtn').addEventListener('click', clearAll);
+        document.getElementById('clearBtn').addEventListener('click', clearCurrent);
 
         function addText(){
           const t = document.getElementById('textInput').value.trim();
           if(!t){ alert('กรุณาใส่ข้อความ'); return; }
-          const el = {{
+          const el = {
             id: ++elementCounter, text: t, x: 50, y: 50,
             fontSize: parseInt(document.getElementById('fontSize').value)||16,
             font: document.getElementById('fontSelect').value,
             color: document.getElementById('textColor').value,
-            page: 1
-          }};
+            page: currentPageNo
+          };
           textElements.push(el); createTextDiv(el); document.getElementById('textInput').value='';
           postElements();
         }
@@ -330,13 +374,13 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
         function createTextDiv(el){
           const div = document.createElement('div');
           div.className = 'text-element'; div.id = 'text-'+el.id;
-          Object.assign(div.style, {{ left:el.x+'px', top:el.y+'px',
-            fontSize:el.fontSize+'px', fontFamily:cssFontFamily(el.font), color:el.color }});
+          Object.assign(div.style, { left:el.x+'px', top:el.y+'px',
+            fontSize:el.fontSize+'px', fontFamily:cssFontFamily(el.font), color:el.color });
           div.textContent = el.text;
 
           const del = document.createElement('button');
           del.className='delete-btn'; del.textContent='×';
-          del.onclick = (e)=>{{ e.stopPropagation(); deleteText(el.id); }};
+          del.onclick = (e)=>{ e.stopPropagation(); deleteText(el.id); };
           const rh  = document.createElement('div'); rh.className='resize-handle';
 
           div.appendChild(del); div.appendChild(rh);
@@ -377,7 +421,7 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
           }
           const changed = isDragging || isResizing;
           isDragging=false; isResizing=false; selectedElement=null;
-          if(changed) postElements(); // ส่งข้อมูลทุกครั้งหลังปล่อยเมาส์
+          if(changed) postElements(); // auto-send after drag/resize
         });
 
         function deleteText(id){
@@ -385,10 +429,11 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
           const div=document.getElementById('text-'+id); if(div) div.remove();
           postElements();
         }
-        function clearAll(){
-          if(!confirm('ลบข้อความทั้งหมดบนหน้านี้?')) return;
-          textElements.forEach(x=>{{ const d=document.getElementById('text-'+x.id); if(d) d.remove(); }});
-          textElements=[]; postElements();
+        function clearCurrent(){
+          if(!confirm('ลบข้อความทั้งหมดบนหน้าปัจจุบัน?')) return;
+          textElements = textElements.filter(x => (x.page||1)!==currentPageNo);
+          rebuildTextLayer();
+          postElements();
         }
 
         // realtime style changes on selected element
@@ -408,25 +453,44 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
           postElements();
         });
 
-        // send elements to Streamlit (no save button; auto)
+        // page navigation
+        document.getElementById('prevPage').addEventListener('click', ()=>{
+          if(currentPageNo<=1) return;
+          currentPageNo--; pageSelect.value=String(currentPageNo); renderPage(currentPageNo);
+        });
+        document.getElementById('nextPage').addEventListener('click', ()=>{
+          if(currentPageNo>=totalPages) return;
+          currentPageNo++; pageSelect.value=String(currentPageNo); renderPage(currentPageNo);
+        });
+        pageSelect.addEventListener('change', (e)=>{
+          currentPageNo = parseInt(e.target.value,10) || 1;
+          renderPage(currentPageNo);
+        });
+
+        // send to Streamlit (auto)
         function postElements(){
           const payload = JSON.stringify(textElements);
-          const msg = {{ isStreamlitMessage: true, type: "streamlit:setComponentValue", value: payload }};
+          const msg = { isStreamlitMessage: true, type: "streamlit:setComponentValue", value: payload };
           window.parent.postMessage(msg, "*");
         }
 
-        // initialize with empty
+        // init
         postElements();
       </script>
     </body>
     </html>
-    """
-    return components.html(html, height=900, scrolling=True)
+    """)
+    html = html_template.substitute(
+        PDF_BASE64=pdf_base64,
+        CUSTOM_FONT_CSS=custom_font_css,
+        TOTAL_PAGES=total_pages,
+    )
+    return components.html(html, height=950, scrolling=True)
 
 # ------------------------------------------------------------
 # App shell
 # ------------------------------------------------------------
-st.markdown('<div class="header-card"><h1>📄 PDF Manager Pro — Interactive Edition</h1><p>ลาก-วางข้อความบนเอกสาร • Zoom ได้ • สร้างไฟล์ PDF อัตโนมัติ</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="header-card"><h1>📄 PDF Manager Pro — Interactive Edition</h1><p>ลาก-วางข้อความ • Zoom • เลือกหน้า • สร้าง PDF อัตโนมัติ</p></div>', unsafe_allow_html=True)
 
 feature = st.sidebar.radio("ฟังก์ชัน", ["✏️ แก้ไข PDF (Interactive)", "🔗 รวมไฟล์ PDF"])
 
@@ -441,27 +505,24 @@ if feature == "✏️ แก้ไข PDF (Interactive)":
         reader = PdfReader(io.BytesIO(pdf_bytes))
         total_pages = len(reader.pages)
         st.success(f"✅ อัปโหลดไฟล์สำเร็จ: {uploaded_file.name}")
-        st.info(f"📄 ไฟล์มี {total_pages} หน้า (ตัวอย่างจะแก้ไขบนหน้าแรก)")
+        st.info(f"📄 ไฟล์มี {total_pages} หน้า")
 
         st.markdown('<div class="sticky-actions"><div class="action-bar">\
-            <div>เคลื่อนย้าย/ปรับขนาดข้อความ แล้วปล่อยเมาส์ ระบบจะสร้างไฟล์ใหม่ให้อัตโนมัติ</div>\
+            <div>ปรับตำแหน่ง/ขนาด/สี หรือสลับหน้า → ระบบสร้างไฟล์ใหม่อัตโนมัติ</div>\
             <div></div></div></div>', unsafe_allow_html=True)
 
         # Component returns JSON string (elements) every time user changes
-        elements_json = interactive_pdf_editor(pdf_bytes)
+        elements_json = interactive_pdf_editor(pdf_bytes, total_pages)
 
         # Keep elements in session & auto build
-        elements = []
         if elements_json:
             try:
-                elements = json.loads(elements_json) or []
-                st.session_state.text_elements = elements
+                st.session_state.text_elements = json.loads(elements_json) or []
             except Exception:
-                elements = st.session_state.get('text_elements', [])
-        else:
-            elements = st.session_state.get('text_elements', [])
+                st.session_state.text_elements = st.session_state.get('text_elements', [])
+        elements = st.session_state.get('text_elements', [])
 
-        # Auto-generate PDF when elements available (no extra button)
+        # Auto-generate PDF (no extra button)
         col1, col2 = st.columns([3,2])
         with col2:
             st.markdown("#### 📤 ไฟล์ผลลัพธ์")
@@ -479,14 +540,14 @@ if feature == "✏️ แก้ไข PDF (Interactive)":
                 st.error(f"❌ เกิดข้อผิดพลาดระหว่างสร้างไฟล์: {e}")
 
         with col1:
-            st.markdown("#### 🧾 รายการข้อความ")
+            st.markdown("#### 🧾 รายการข้อความทั้งหมด")
             if elements:
                 for i, el in enumerate(elements, 1):
-                    st.write(f"**{i}.** `{el.get('text','')[:60]}` | ฟอนต์: {el.get('font')} | ขนาด: {el.get('fontSize')} | ตำแหน่ง: ({el.get('x')}, {el.get('y')})")
+                    st.write(f"**{i}.** `{el.get('text','')[:60]}` | ฟอนต์: {el.get('font')} | ขนาด: {el.get('fontSize')} | ตำแหน่ง: ({el.get('x')}, {el.get('y')}) | หน้า: {el.get('page',1)}")
                 with st.expander("ดูข้อมูล JSON"):
                     st.json(elements)
             else:
-                st.info("ยังไม่มีข้อความบนหน้าเอกสาร")
+                st.info("ยังไม่มีข้อความบนเอกสาร")
 
 # ------------------------------------------------------------
 # Merge PDFs (เดิม)
