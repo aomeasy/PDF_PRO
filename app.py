@@ -1,9 +1,12 @@
 # app.py
 # Streamlit PDF editor (Cloud friendly) — ใช้ PyMuPDF เรนเดอร์ภาพ (ไม่ต้องใช้ poppler)
+# รองรับการเลือกฟอนต์จากโฟลเดอร์ fonts/ แล้วฝังลง PDF
 # Run locally: streamlit run app.py
 
 import io
-from typing import Dict, List, Any
+import os
+import glob
+from typing import Dict, List, Any, Optional
 
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
@@ -66,50 +69,73 @@ with st.container():
 st.write("")
 
 # ---------------------------
-# Sidebar
-# ---------------------------
-with st.sidebar:
-    st.markdown("### ขั้นตอน")
-    st.markdown("1) อัปโหลด PDF  \n2) แก้ไขบนแคนวาส  \n3) บันทึก/ดาวน์โหลด")
-    st.divider()
-    zoom = st.slider("ซูมหน้ากระดาษ", 50, 220, 120, help="ปรับขนาดแสดงผลหน้า PDF")
-    stroke_width = st.slider("ความหนาเส้น", 1, 12, 3)
-    stroke_color = st.color_picker("สีเส้น/ข้อความ", "#111827")
-    fill_color = st.color_picker("สีพื้นวัตถุ (โปร่งใสไว้สวยกว่า)", "#00000000")
-    font_size = st.slider("ขนาดตัวอักษร", 10, 72, 20)
-    dpi = st.slider("คุณภาพเรนเดอร์ (DPI)", 96, 200, 150, help="ค่ามาก = ชัดขึ้น แต่ใช้หน่วยความจำมากขึ้น")
-    st.caption("Tip: ใช้โหมด Text แล้วคลิกที่ภาพเพื่อวางข้อความ")
-
-# ---------------------------
 # Utils
 # ---------------------------
 @st.cache_data(show_spinner=False)
+def list_fonts(font_dir: str = "fonts") -> List[str]:
+    if not os.path.isdir(font_dir):
+        return []
+    files = sorted(glob.glob(os.path.join(font_dir, "*.ttf")) + glob.glob(os.path.join(font_dir, "*.otf")))
+    return [os.path.basename(f) for f in files]
+
+@st.cache_data(show_spinner=False)
 def render_pdf_to_images_pymupdf(pdf_bytes: bytes, dpi: int = 150) -> List[Image.Image]:
-    """
-    เรนเดอร์หน้า PDF เป็น PIL.Image ด้วย PyMuPDF (ไม่ต้องใช้ poppler)
-    """
+    """เรนเดอร์หน้า PDF เป็น PIL.Image ด้วย PyMuPDF (ไม่ต้องใช้ poppler)"""
     images: List[Image.Image] = []
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-        # factor = dpi / 72  (72 dpi = 1.0)
-        zoom = dpi / 72.0
+        zoom = dpi / 72.0  # 72 dpi = scale 1.0
         mat = fitz.Matrix(zoom, zoom)
         for page in doc:
             pix = page.get_pixmap(matrix=mat, alpha=False)
-            mode = "RGB"
-            img = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             images.append(img)
     return images
 
-def apply_annotations_to_pdf(src_pdf: bytes, annotations: Dict[int, List[Dict[str, Any]]], dpi_used: int) -> bytes:
+def hex_to_rgb(h: Optional[str]):
+    if not h or h == "#00000000":
+        return None
+    h = h.lstrip("#")
+    if len(h) == 8:  # RGBA → ตัด alpha
+        h = h[:6]
+    return tuple(int(h[i:i+2], 16)/255 for i in (0, 2, 4))
+
+def resolve_font(font_filename: Optional[str]) -> (Optional[str], Optional[str]):
+    """
+    รับชื่อไฟล์ฟอนต์จากโฟลเดอร์ fonts/ (เช่น 'Sarabun-Regular.ttf')
+    คืน (fontname_tag, full_path) สำหรับใช้กับ PyMuPDF
+    ถ้าไม่พบ จะคืน (None, None) เพื่อใช้ฟอนต์เริ่มต้นของ PDF
+    """
+    if not font_filename:
+        return None, None
+    font_path = os.path.join("fonts", font_filename)
+    if not os.path.isfile(font_path):
+        return None, None
+    # ใช้ชื่อไฟล์ (ไม่รวมสกุล) เป็น tag
+    fontname_tag = os.path.splitext(os.path.basename(font_path))[0]
+    return fontname_tag, font_path
+
+def apply_annotations_to_pdf(
+    src_pdf: bytes,
+    annotations: Dict[int, List[Dict[str, Any]]],
+    dpi_used: int,
+    selected_font_filename: Optional[str]
+) -> bytes:
     """
     วาดวัตถุจากแคนวาสกลับเข้า PDF ด้วย PyMuPDF
-    แมปพิกัดจากขนาดภาพที่เรนเดอร์ด้วย dpi_used → ขนาดหน้าจริงของ PDF
+    - แมปพิกัดจากขนาดภาพ (เรนเดอร์ด้วย dpi_used) → ขนาดหน้าจริงของ PDF
+    - รองรับฝังฟอนต์จากโฟลเดอร์ fonts/ เมื่อใส่ข้อความ
     """
     doc = fitz.open(stream=src_pdf, filetype="pdf")
     out = io.BytesIO()
 
-    # เตรียมสัดส่วนอ้างอิงตาม dpi_used
+    # เตรียมอ้างอิงขนาดภาพตาม dpi_used
     ref_images = render_pdf_to_images_pymupdf(src_pdf, dpi=dpi_used)
+
+    # เตรียมฟอนต์ (ถ้าเลือก)
+    fontname_tag, font_path = resolve_font(selected_font_filename)
+    if fontname_tag and font_path:
+        # register ฟอนต์ระดับเอกสาร (เรียกครั้งเดียวใช้ได้ทุกหน้า)
+        doc.insert_font(fontname=fontname_tag, fontfile=font_path)
 
     for page_index in range(len(doc)):
         page = doc[page_index]
@@ -172,22 +198,32 @@ def apply_annotations_to_pdf(src_pdf: bytes, annotations: Dict[int, List[Dict[st
 
             elif t == "text":
                 text_val = props.get("text", "")
+                if not text_val:
+                    continue
                 left = float(props.get("left", 0)) * sx
                 top = float(props.get("top", 0)) * sy
                 size = float(props.get("fontSize", 14))
-                page.insert_text(fitz.Point(left, top + size), text_val, fontsize=size, color=hex_to_rgb(stroke))
+
+                # ถ้าเลือกฟอนต์ได้จะใช้ฟอนต์นั้น ไม่งั้นใช้ฟอนต์ default
+                if fontname_tag:
+                    page.insert_text(
+                        fitz.Point(left, top + size),
+                        text_val,
+                        fontsize=size,
+                        fontname=fontname_tag,
+                        color=hex_to_rgb(stroke),
+                    )
+                else:
+                    page.insert_text(
+                        fitz.Point(left, top + size),
+                        text_val,
+                        fontsize=size,
+                        color=hex_to_rgb(stroke),
+                    )
 
     doc.save(out)
     doc.close()
     return out.getvalue()
-
-def hex_to_rgb(h: str):
-    if not h or h == "#00000000":
-        return None
-    h = h.lstrip("#")
-    if len(h) == 8:  # RGBA → ตัด alpha
-        h = h[:6]
-    return tuple(int(h[i:i+2], 16)/255 for i in (0, 2, 4))
 
 # ---------------------------
 # State
@@ -200,6 +236,35 @@ if "page_index" not in st.session_state:
     st.session_state.page_index = 0
 if "annos" not in st.session_state:
     st.session_state.annos = {}  # page_index -> list objects
+
+# ---------------------------
+# Sidebar (Controls)
+# ---------------------------
+with st.sidebar:
+    st.markdown("### ขั้นตอน")
+    st.markdown("1) อัปโหลด PDF  \n2) แก้ไขบนแคนวาส  \n3) บันทึก/ดาวน์โหลด")
+    st.divider()
+    zoom = st.slider("ซูมหน้ากระดาษ", 50, 220, 120, help="ปรับขนาดแสดงผลหน้า PDF")
+    stroke_width = st.slider("ความหนาเส้น", 1, 12, 3)
+    stroke_color = st.color_picker("สีเส้น/ข้อความ", "#111827")
+    fill_color = st.color_picker("สีพื้นวัตถุ (โปร่งใสไว้สวยกว่า)", "#00000000")
+    font_size = st.slider("ขนาดตัวอักษร", 10, 72, 20)
+    dpi = st.slider("คุณภาพเรนเดอร์ (DPI)", 96, 220, 150,
+                    help="ค่ามาก = ชัดขึ้น แต่ใช้หน่วยความจำมากขึ้น")
+
+    st.divider()
+    st.markdown("### ฟอนต์ (จากโฟลเดอร์ `fonts/`)")
+    fonts = list_fonts("fonts")
+    selected_font = st.selectbox(
+        "เลือกไฟล์ฟอนต์ (.ttf/.otf)",
+        options=(["(ค่าเริ่มต้นของระบบ)"] + fonts) if fonts else ["(ไม่มีฟอนต์ในโฟลเดอร์)"],
+        index=0
+    )
+    chosen_font_filename = None
+    if fonts and selected_font != "(ค่าเริ่มต้นของระบบ)":
+        chosen_font_filename = selected_font
+    if not fonts:
+        st.caption("ใส่ไฟล์ฟอนต์ในโฟลเดอร์ `fonts/` เพื่อให้เลือกได้ที่นี่")
 
 # ---------------------------
 # Upload
@@ -247,6 +312,7 @@ with c3:
                 st.session_state.pdf_bytes,
                 st.session_state.annos,
                 dpi_used=dpi,
+                selected_font_filename=chosen_font_filename,
             )
         st.download_button(
             "ดาวน์โหลดไฟล์",
@@ -307,7 +373,7 @@ with canvas_col:
         font_size=font_size,
     )
 
-# บันทึก annotation ของหน้านี้
+# เก็บ annotation ของหน้านี้
 if json_data and "objects" in json_data:
     st.session_state.annos[st.session_state.page_index] = json_data["objects"]
 
