@@ -1,348 +1,304 @@
-def interactive_pdf_editor_fullscreen(pdf_bytes: bytes | None, total_pages:int):
-    import base64, os
-    pdf_b64 = base64.b64encode(pdf_bytes).decode() if pdf_bytes else ""
+# pdf24_style_streamlit_app.py
+# Modern SPA-like PDF editor inspired by PDF24 Tools
+# Run: streamlit run pdf24_style_streamlit_app.py
 
-    custom_font_css = ""
-    for fname in ["THSarabunPSK", "THSarabunNew"]:
-        fp = os.path.join("fonts", f"{fname}.ttf")
-        if os.path.exists(fp):
-            try:
-                with open(fp, "rb") as f: b64 = base64.b64encode(f.read()).decode()
-                custom_font_css += """
-                @font-face {{
-                  font-family:'{fname}';
-                  src:url(data:font/ttf;base64,{b64}) format('truetype');
-                  font-weight:400; font-style:normal; font-display:swap;
-                }}
-                """.format(fname=fname, b64=b64)
-            except Exception:
-                pass
+import io
+import json
+from typing import Dict, List, Any
 
-    html = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8"/>
-      <meta name="viewport" content="width=device-width, initial-scale=1"/>
-      <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-      <style>
-        %s
-        /* เพิ่มเติมสำหรับการมองเห็นที่ชัดขึ้น */
-        .toast{position:fixed; left:50%%; top:18px; transform:translateX(-50%%);
-               background:#111827; color:#fff; padding:8px 12px; border-radius:10px;
-               box-shadow:0 8px 24px rgba(0,0,0,.15); font-size:.9rem; z-index:9999; opacity:0; transition:opacity .2s;}
-        .toast.show{opacity:1;}
-        .text-element.added-hl{ box-shadow:0 0 0 3px rgba(59,130,246,.35) inset; background:rgba(59,130,246,.08); }
-      </style>
-    </head>
-    <body>
-      <div class="editor-shell">
-        <!-- Left: Thumbnails -->
-        <div class="panel">
-          <div class="panel-header">หน้าเอกสาร</div>
-          <div class="panel-body" id="thumbs"></div>
-        </div>
+import streamlit as st
+from streamlit_drawable_canvas import st_canvas
+from pdf2image import convert_from_bytes
+import fitz  # PyMuPDF
+from PIL import Image, ImageOps
 
-        <!-- Center: Viewer -->
-        <div class="panel viewer-wrap">
-          <div class="toolbar" id="toolbar">
-            <div class="group info-chip"><span id="pageInfo">Page 1 / %d</span></div>
-            <div class="group seg">
-              <button id="prevBtn">◀</button>
-              <button id="nextBtn">▶</button>
+# ---------------------------
+# App Config
+# ---------------------------
+st.set_page_config(
+    page_title="PDF Editor — Minimal SPA",
+    page_icon="📝",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+PRIMARY = "#0F172A"  # slate-900
+SECONDARY = "#334155"  # slate-700
+ACCENT = "#2563EB"  # blue-600
+BG_SOFT = "#F8FAFC"  # slate-50
+BORDER = "#E2E8F0"   # slate-200
+
+st.markdown(
+    f"""
+    <style>
+    .block-container {{max-width: 1300px; padding-top: 1rem;}}
+    header {{ visibility: hidden; }}
+    .topbar {{
+        display:flex; align-items:center; gap:.75rem; padding:.75rem 1rem;
+        background:{BG_SOFT}; border:1px solid {BORDER}; border-radius:14px;
+    }}
+    .brand {{
+        font-weight:700; letter-spacing:.2px; color:{PRIMARY};
+    }}
+    .pill {{
+        padding:.15rem .6rem; border:1px solid {BORDER}; border-radius:999px; font-size:.8rem; color:{SECONDARY};
+    }}
+    .button-ghost > button {{
+        background:white !important; color:{PRIMARY} !important; border:1px solid {BORDER} !important;
+        border-radius:10px !important;
+    }}
+    .button-accent > button {{
+        background:{ACCENT} !important; color:white !important; border-radius:10px !important;
+    }}
+    .toolbar {{ display:flex; gap:.5rem; align-items:center; }}
+    .subtle {{ color:{SECONDARY}; font-size:.9rem; }}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+with st.container():
+    col_l, col_r = st.columns([1, 3])
+    with col_l:
+        st.markdown(
+            f"""
+            <div class="topbar">
+                <span class="brand">PDF Editor</span>
+                <span class="pill">ฟรี</span>
+                <span class="pill">ออนไลน์</span>
+                <span class="pill">ไม่ฉูดฉาด</span>
             </div>
-            <div class="group seg" style="margin-left:8px">
-              <button id="zoomOut">−</button>
-              <button id="zoomReset">100%%</button>
-              <button id="zoomIn">＋</button>
-              <button id="zoomFit" title="Fit to width">Fit</button>
-            </div>
-            <div class="group" style="margin-left:auto">
-              <button id="addText" class="btn">➕ เพิ่มข้อความ</button>
-              <button id="clearPage" class="btn" title="ล้างข้อความหน้าปัจจุบัน">🗑️ ล้างหน้านี้</button>
-            </div>
-          </div>
+            """,
+            unsafe_allow_html=True
+        )
+    with col_r:
+        st.write("")
 
-          <div class="viewer" id="viewer">
-            <div class="page-holder" id="pageHolder">
-              <canvas id="pdfCanvas" class="pdf-canvas" width="595" height="842"></canvas>
-              <div class="text-layer" id="textLayer"></div>
-            </div>
-          </div>
-        </div>
+st.write("")
 
-        <!-- Right: Properties -->
-        <div class="panel">
-          <div class="panel-header">คุณสมบัติ</div>
-          <div class="panel-body props-body">
-            <label>ข้อความ</label>
-            <textarea id="propText" rows="3" placeholder="เลือกกล่องข้อความเพื่อแก้ไข"></textarea>
-            <div class="row">
-              <div>
-                <label>ฟอนต์</label>
-                <select id="propFont">
-                  <option value="Helvetica">Helvetica</option>
-                  <option value="Times-Roman">Times New Roman</option>
-                  <option value="Courier">Courier</option>
-                  <option value="THSarabunPSK">TH Sarabun PSK</option>
-                  <option value="THSarabunNew">TH Sarabun New</option>
-                </select>
-              </div>
-              <div>
-                <label>ขนาด</label>
-                <input type="number" id="propSize" value="16" min="8" max="96"/>
-              </div>
-            </div>
-            <div>
-              <label>สี</label>
-              <input type="color" id="propColor" value="#111111"/>
-            </div>
-            <div class="row">
-              <div><label>X</label><input type="number" id="propX" value="50" min="0" max="595"/></div>
-              <div><label>Y</label><input type="number" id="propY" value="50" min="0" max="842"/></div>
-            </div>
-            <div><button id="deleteBox" class="btn" style="background:#fff0f0;border-color:#fecaca;color:#b91c1c">ลบกล่อง</button></div>
-            <hr/><small style="color:#64748b">ปล่อยเมาส์เมื่อย้าย/ปรับขนาด ระบบจะส่งข้อมูลกลับไป Streamlit อัตโนมัติ</small>
-          </div>
-        </div>
-      </div>
+# ---------------------------
+# Sidebar (SPA-like)
+# ---------------------------
+with st.sidebar:
+    st.markdown("### ขั้นตอน")
+    st.marklowdown = st.markdown  # alias to keep it short (no functional effect)
+    st.markdown("1) อัปโหลด PDF  \n2) แก้ไขบนแคนวาส  \n3) ดาวน์โหลด PDF ใหม่")
+    st.divider()
+    zoom = st.slider("ซูมหน้ากระดาษ", 50, 250, 120, help="ปรับขนาดแสดงผลของหน้า PDF")
+    stroke_width = st.slider("ความหนาเส้น", 1, 12, 3)
+    stroke_color = st.color_picker("สีเส้น/ข้อความ", "#111827")
+    fill_color = st.color_picker("สีพื้นวัตถุ (โปร่งใสไว้สวยกว่า)", "#00000000")
+    font_size = st.slider("ขนาดตัวอักษร", 10, 72, 20)
+    st.caption("Tip: ใช้โหมด Text แล้วคลิกที่ภาพเพื่อวางข้อความ")
 
-      <div id="toast" class="toast">เพิ่มข้อความแล้ว</div>
+# ---------------------------
+# Utils
+# ---------------------------
+@st.cache_data(show_spinner=False)
+def render_pdf_to_images(pdf_bytes: bytes, dpi: int = 160) -> List[Image.Image]:
+    pages = convert_from_bytes(pdf_bytes, dpi=dpi, fmt="png", thread_count=2)
+    return [ImageOps.exif_transpose(p) for p in pages]
 
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-      <script>
-      // ===== Helpers =====
-      const pdfDataB64 = '%s';
-      function b642u8(b){const r=atob(b); const a=new Uint8Array(r.length); for(let i=0;i<r.length;i++) a[i]=r.charCodeAt(i); return a;}
-      const CSS_FONT_MAP = {
-        "Helvetica":"Helvetica, Arial, sans-serif",
-        "Times-Roman":"'Times New Roman', Times, serif",
-        "Courier":"'Courier New', Courier, monospace",
-        "THSarabunPSK":"'THSarabunPSK','Sarabun','Noto Sans Thai',sans-serif",
-        "THSarabunNew":"'THSarabunNew','Sarabun','Noto Sans Thai',sans-serif"
-      };
-      function cssFont(n){return CSS_FONT_MAP[n] || n;}
-      function showToast(msg){ const t=document.getElementById('toast'); t.textContent=msg||t.textContent; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1200); }
+def apply_annotations_to_pdf(src_pdf: bytes, annotations: Dict[int, List[Dict[str, Any]]]) -> bytes:
+    """
+    วาดวัตถุจากแคนวาสกลับเข้า PDF ด้วย PyMuPDF
+    แมปพิกัดจากขนาดภาพแสดงผล → ขนาดหน้าจริงของ PDF
+    """
+    doc = fitz.open(stream=src_pdf, filetype="pdf")
+    out = io.BytesIO()
 
-      // ===== State =====
-      let pdfDoc=null; let currentPage=1; const totalPages=%d;
-      let zoom=1.0; let baseW=595, baseH=842;
-      let textElements=[]; let idCounter=0;
-      let selectedId=null; let dragMode=null;
-      let startX=0, startY=0, startLeft=0, startTop=0, startSize=16;
+    # ภาพที่ใช้แสดงผล (เพื่อคำนวณสัดส่วน)
+    images = render_pdf_to_images(src_pdf, dpi=160)
 
-      // ===== DOM =====
-      const pdfCanvas = document.getElementById('pdfCanvas');
-      const ctx = pdfCanvas.getContext('2d');
-      const pageHolder = document.getElementById('pageHolder');
-      const textLayer = document.getElementById('textLayer');
-      const pageInfo = document.getElementById('pageInfo');
-      const viewer = document.getElementById('viewer');
-      const thumbs = document.getElementById('thumbs');
+    for page_index in range(len(doc)):
+        page = doc[page_index]
+        page_width, page_height = page.rect.width, page.rect.height
 
-      const propText = document.getElementById('propText');
-      const propFont = document.getElementById('propFont');
-      const propSize = document.getElementById('propSize');
-      const propColor= document.getElementById('propColor');
-      const propX = document.getElementById('propX');
-      const propY = document.getElementById('propY');
-      const deleteBox = document.getElementById('deleteBox');
+        canvas_items = annotations.get(page_index, [])
+        if not canvas_items:
+            continue
 
-      // ===== PDF load =====
-      pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      if(pdfDataB64){
-        pdfjsLib.getDocument({data:b642u8(pdfDataB64)}).promise.then(pdf=>{
-          pdfDoc = pdf;
-          buildThumbnails();
-          renderPage(1, true); // true = doFit
-        });
-      }
+        img = images[page_index]
+        disp_w, disp_h = img.size
 
-      function buildThumbnails(){
-        thumbs.innerHTML='';
-        for(let i=1;i<=totalPages;i++){
-          const wrap=document.createElement('div'); wrap.className='thumb'; wrap.dataset.page=i;
-          const c=document.createElement('canvas'); c.width=160; c.height=226;
-          wrap.appendChild(c); thumbs.appendChild(wrap);
-          pdfDoc.getPage(i).then(p=>{
-            const vp=p.getViewport({scale:1});
-            const s=Math.min(c.width/vp.width, c.height/vp.height);
-            const v=p.getViewport({scale:s});
-            c.width=v.width; c.height=v.height;
-            p.render({canvasContext:c.getContext('2d'), viewport:v});
-          });
-          wrap.addEventListener('click',()=>{ renderPage(i, true); });
-        }
-      }
+        sx = page_width / disp_w
+        sy = page_height / disp_h
 
-      // ===== Render =====
-      function renderPage(n, doFit=false){
-        currentPage = n;
-        pageInfo.textContent = `Page ${n} / ${totalPages}`;
-        [...thumbs.children].forEach(el=> el.classList.toggle('active', parseInt(el.dataset.page,10)===n));
+        for item in canvas_items:
+            t = item.get("type")
+            props = item.get("props", {})
 
-        pdfDoc.getPage(n).then(p=>{
-          const unscaled = p.getViewport({scale:1});
-          const s = Math.min(baseW/unscaled.width, baseH/unscaled.height);
-          const vp = p.getViewport({scale:s});
-          pdfCanvas.width = vp.width; pdfCanvas.height = vp.height;
-          pageHolder.style.width = vp.width+'px';
-          pageHolder.style.height = vp.height+'px';
-          return p.render({canvasContext:ctx, viewport:vp}).promise;
-        }).then(()=>{
-          redrawTextLayer();
-          if(doFit) fitToWidth();
-        });
-      }
+            stroke = props.get("stroke", "#000000")
+            fill = props.get("fill", None)
+            line_w = float(props.get("strokeWidth", 2))
 
-      function redrawTextLayer(){
-        textLayer.innerHTML='';
-        textElements.filter(e=>e.page===currentPage).forEach(drawBox);
-        applyZoom();
-      }
+            if t in ("rect", "ellipse"):
+                left = float(props.get("left", 0)) * sx
+                top = float(props.get("top", 0)) * sy
+                width = float(props.get("width", 0)) * sx
+                height = float(props.get("height", 0)) * sy
+                rect = fitz.Rect(left, top, left + width, top + height)
 
-      // ===== Zoom & Fit =====
-      function applyZoom(){ pageHolder.style.transform = `scale(${zoom})`; }
-      function fitToWidth(){
-        const vw = viewer.clientWidth || viewer.getBoundingClientRect().width;
-        const canvasW = pdfCanvas.width;
-        if(canvasW>0){
-          const pad = 48; // margin
-          zoom = Math.max(0.5, Math.min(2.4, (vw - pad)/canvasW));
-          applyZoom();
-        }
-      }
-      window.addEventListener('resize', ()=>fitToWidth());
+                if t == "rect":
+                    page.draw_rect(rect, color=hex_to_rgb(stroke),
+                                   fill=hex_to_rgb(fill) if fill and fill != "#00000000" else None,
+                                   width=line_w)
+                else:
+                    page.draw_oval(rect, color=hex_to_rgb(stroke),
+                                   fill=hex_to_rgb(fill) if fill and fill != "#00000000" else None,
+                                   width=line_w)
 
-      document.getElementById('zoomIn').onclick = ()=>{ zoom=Math.min(2.4, zoom+0.1); applyZoom(); };
-      document.getElementById('zoomOut').onclick= ()=>{ zoom=Math.max(0.5, zoom-0.1); applyZoom(); };
-      document.getElementById('zoomReset').onclick=()=>{ zoom=1.0; applyZoom(); };
-      document.getElementById('zoomFit').onclick = ()=> fitToWidth();
+            elif t == "path":
+                # เส้นอิสระ (polyline)
+                points = props.get("path", [])
+                pts = []
+                for p in points:
+                    x = float(p[1]) * sx
+                    y = float(p[2]) * sy
+                    pts.append((x, y))
+                if len(pts) >= 2:
+                    page.draw_polyline(pts, color=hex_to_rgb(stroke), width=line_w)
 
-      // ===== Navigation =====
-      document.getElementById('prevBtn').onclick=()=>{ if(currentPage>1) renderPage(currentPage-1, true); };
-      document.getElementById('nextBtn').onclick=()=>{ if(currentPage<totalPages) renderPage(currentPage+1, true); };
+            elif t == "line":
+                x1 = float(props.get("x1", 0)) * sx
+                y1 = float(props.get("y1", 0)) * sy
+                x2 = float(props.get("x2", 0)) * sx
+                y2 = float(props.get("y2", 0)) * sy
+                page.draw_line(fitz.Point(x1, y1), fitz.Point(x2, y2),
+                               color=hex_to_rgb(stroke), width=line_w)
 
-      // ===== Text boxes =====
-      document.getElementById('addText').onclick = ()=>{
-        const el={ id: ++idCounter, page: currentPage, text:'ข้อความใหม่',
-          x: 80, y: 80, font:'Helvetica', fontSize:20, color:'#111111'
-        };
-        textElements.push(el);
-        const node = drawBox(el);
-        // Auto-select + highlight + scroll to center + focus prop
-        select(el.id);
-        node.classList.add('added-hl'); setTimeout(()=>node.classList.remove('added-hl'), 900);
-        // scroll ให้กล่องอยู่กลาง viewport
-        const rect = node.getBoundingClientRect();
-        viewer.scrollBy({ left: rect.left - viewer.clientWidth/2 + rect.width/2, top: rect.top - viewer.clientHeight/2 + rect.height/2, behavior:'smooth' });
-        propText.focus();
-        showToast('เพิ่มข้อความแล้ว');
-        postElements();
-      };
+            elif t == "text":
+                text_val = props.get("text", "")
+                left = float(props.get("left", 0)) * sx
+                top = float(props.get("top", 0)) * sy
+                size = float(props.get("fontSize", 14))
+                page.insert_text(fitz.Point(left, top + size), text_val,
+                                 fontsize=size, color=hex_to_rgb(stroke))
 
-      document.getElementById('clearPage').onclick = ()=>{
-        if(!confirm('ล้างข้อความบนหน้านี้ทั้งหมด?')) return;
-        textElements = textElements.filter(e=>e.page!==currentPage);
-        redrawTextLayer(); postElements();
-      };
+    doc.save(out)
+    doc.close()
+    return out.getvalue()
 
-      function drawBox(el){
-        const d=document.createElement('div'); d.className='text-element'; d.id=`t-${el.id}`;
-        d.style.left=el.x+'px'; d.style.top=el.y+'px';
-        d.style.fontFamily=cssFont(el.font); d.style.fontSize=el.fontSize+'px'; d.style.color=el.color;
-        d.append(document.createTextNode(el.text));
+def hex_to_rgb(h: str):
+    if not h or h == "#00000000":
+        return None
+    h = h.lstrip("#")
+    if len(h) == 8:  # RGBA → ตัด alpha
+        h = h[:6]
+    return tuple(int(h[i:i+2], 16)/255 for i in (0, 2, 4))
 
-        const del=document.createElement('button'); del.className='delete-btn'; del.textContent='×';
-        del.onclick=(e)=>{ e.stopPropagation(); removeBox(el.id); };
-        const rh=document.createElement('div'); rh.className='resize-handle';
+# ---------------------------
+# State
+# ---------------------------
+if "pdf_bytes" not in st.session_state:
+    st.session_state.pdf_bytes = None
+if "images" not in st.session_state:
+    st.session_state.images = []
+if "page_index" not in st.session_state:
+    st.session_state.page_index = 0
+if "annos" not in st.session_state:
+    st.session_state.annos = {}  # dict: page_index -> list of objects
 
-        d.appendChild(del); d.appendChild(rh); textLayer.appendChild(d);
+# ---------------------------
+# Upload
+# ---------------------------
+uploaded = st.file_uploader("เลือกไฟล์ PDF เพื่อเริ่มแก้ไข", type=["pdf"], label_visibility="collapsed")
 
-        d.addEventListener('mousedown', (e)=>{
-          if(e.target===rh){ dragMode='resize'; startY=e.clientY; startSize=el.fontSize; }
-          else{ dragMode='move'; startX=e.clientX; startY=e.clientY; startLeft=el.x; startTop=el.y; }
-          select(el.id);
-        });
+if uploaded is not None:
+    st.session_state.pdf_bytes = uploaded.read()
+    st.session_state.images = render_pdf_to_images(st.session_state.pdf_bytes)
+    st.session_state.page_index = 0
+    for i in range(len(st.session_state.images)):
+        st.session_state.annos.setdefault(i, [])
 
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
+if not st.session_state.pdf_bytes:
+    st.info("อัปโหลดไฟล์ PDF เพื่อเริ่มใช้งาน")
+    st.stop()
 
-        function onMove(e){
-          if(selectedId!==el.id) return;
-          if(dragMode==='move'){
-            const dx=(e.clientX-startX)/zoom, dy=(e.clientY-startY)/zoom;
-            el.x=Math.max(0, Math.min(startLeft+dx, pdfCanvas.width-4));
-            el.y=Math.max(0, Math.min(startTop+dy,  pdfCanvas.height-4));
-            d.style.left=el.x+'px'; d.style.top=el.y+'px';
-            syncProps(el);
-          } else if(dragMode==='resize'){
-            const dy=(e.clientY-startY)/zoom;
-            el.fontSize=Math.max(8, Math.min(96, startSize+dy));
-            d.style.fontSize=el.fontSize+'px'; syncProps(el);
-          }
-        }
-        function onUp(){ if(dragMode){ postElements(); } dragMode=null; }
-        return d;
-      }
+# ---------------------------
+# Pager + Actions
+# ---------------------------
+pages = st.session_state.images
+n_pages = len(pages)
 
-      function select(id){
-        selectedId=id;
-        [...document.querySelectorAll('.text-element')].forEach(n=>n.classList.remove('selected'));
-        const d=document.getElementById(`t-${id}`); d?.classList.add('selected');
-        const el = textElements.find(x=>x.id===id); if(el){ loadProps(el); }
-      }
-      function loadProps(el){
-        propText.value=el.text; propFont.value=el.font; propSize.value=el.fontSize;
-        propColor.value=el.color; propX.value=el.x; propY.value=el.y;
-      }
-      function syncProps(el){
-        if(selectedId!==el.id) return;
-        propX.value=Math.round(el.x); propY.value=Math.round(el.y);
-        propSize.value=Math.round(el.fontSize);
-      }
-      function updateFromProps(){
-        if(!selectedId) return;
-        const el = textElements.find(x=>x.id===selectedId); if(!el) return;
-        el.text=propText.value; el.font=propFont.value; el.fontSize=parseInt(propSize.value)||16; el.color=propColor.value;
-        el.x=parseFloat(propX.value)||0; el.y=parseFloat(propY.value)||0;
-        const d=document.getElementById(`t-${el.id}`);
-        if(d){
-          // rebuild children to preserve controls
-          d.innerHTML='';
-          d.append(document.createTextNode(el.text));
-          const del=document.createElement('button'); del.className='delete-btn'; del.textContent='×';
-          del.onclick=(e)=>{ e.stopPropagation(); removeBox(el.id); };
-          const rh=document.createElement('div'); rh.className='resize-handle';
-          d.appendChild(del); d.appendChild(rh);
-          d.style.left=el.x+'px'; d.style.top=el.y+'px';
-          d.style.fontFamily=cssFont(el.font); d.style.fontSize=el.fontSize+'px'; d.style.color=el.color;
-        }
-        postElements();
-      }
-      propText.oninput=updateFromProps;
-      propFont.onchange=updateFromProps;
-      propSize.onchange=updateFromProps;
-      propColor.onchange=updateFromProps;
-      propX.onchange=updateFromProps;
-      propY.onchange=updateFromProps;
+c1, c2, c3, c4 = st.columns([2, 2, 2, 6], vertical_alignment="center")
+with c1:
+    st.markdown("**เลือกหน้า**")
+    page_i = st.number_input("page", min_value=1, max_value=n_pages,
+                             value=st.session_state.page_index + 1,
+                             label_visibility="collapsed")
+    if page_i - 1 != st.session_state.page_index:
+        st.session_state.page_index = page_i - 1
 
-      function removeBox(id){
-        textElements = textElements.filter(x=>x.id!==id);
-        const d=document.getElementById(`t-${id}`); d?.remove();
-        if(selectedId===id) selectedId=null;
-        postElements();
-      }
-      deleteBox.onclick=()=>{ if(selectedId) removeBox(selectedId); };
+with c2:
+    if st.button("ล้างการแก้ไขหน้านี้", use_container_width=True):
+        st.session_state.annos[st.session_state.page_index] = []
 
-      // ===== Post to Streamlit =====
-      function postElements(){
-        const msg = { isStreamlitMessage:true, type:"streamlit:setComponentValue", value: JSON.stringify(textElements) };
-        window.parent.postMessage(msg, "*");
-      }
-      </script>
-    </body>
-    </html>
-    """ % (custom_font_css, total_pages, pdf_b64, total_pages)
+with c3:
+    if st.button("บันทึกเป็น PDF", type="primary", use_container_width=True):
+        with st.spinner("กำลังรวมการแก้ไขกลับเข้า PDF..."):
+            pdf_out = apply_annotations_to_pdf(st.session_state.pdf_bytes, st.session_state.annos)
+        st.download_button("ดาวน์โหลดไฟล์", data=pdf_out,
+                           file_name="edited.pdf", mime="application/pdf",
+                           use_container_width=True)
 
-    return components.html(html, height=900, scrolling=False)
+with c4:
+    st.markdown('<div class="subtle">การเปลี่ยนแปลงจะยังไม่เขียนทับจนกว่าจะกด “บันทึกเป็น PDF”</div>', unsafe_allow_html=True)
+
+st.divider()
+
+# ---------------------------
+# Canvas
+# ---------------------------
+img = pages[st.session_state.page_index]
+disp_w = int(img.size[0] * (zoom / 100))
+disp_h = int(img.size[1] * (zoom / 100))
+img_disp = img.resize((disp_w, disp_h))
+
+toolbar_col, canvas_col = st.columns([1.6, 5])
+
+with toolbar_col:
+    st.markdown("#### เครื่องมือ")
+    mode = st.segmented_control(
+        "โหมด",
+        options=["🖊️ เส้น", "⬛ สี่เหลี่ยม", "⚪ วงรี", "↔️ เส้นตรง", "🔤 ข้อความ", "🧽 ลบ"],
+        default="🖊️ เส้น",
+        help="เลือกโหมดการวาด/เพิ่มข้อความ"
+    )
+    mapping = {
+        "🖊️ เส้น": "freedraw",
+        "⬛ สี่เหลี่ยม": "rect",
+        "⚪ วงรี": "ellipse",
+        "↔️ เส้นตรง": "line",
+        "🔤 ข้อความ": "text",
+        "🧽 ลบ": "transform",
+    }
+    drawing_mode = mapping[mode]
+    st.caption("โหมดลบ: คลิกเลือกวัตถุ แล้วกดปุ่ม Backspace/Delete")
+
+with canvas_col:
+    json_data = st_canvas(
+        fill_color=fill_color,
+        stroke_width=stroke_width,
+        stroke_color=stroke_color,
+        background_image=img_disp,
+        update_streamlit=True,
+        height=disp_h,
+        width=disp_w,
+        drawing_mode=drawing_mode,
+        key=f"canvas_{st.session_state.page_index}",
+        display_toolbar=True,
+        initial_drawing={"version": "5.2.4", "objects": st.session_state.annos.get(st.session_state.page_index, [])},
+        background_color="rgba(0,0,0,0)",
+        font_size=font_size,
+    )
+
+# Persist annotations of current page
+if json_data and "objects" in json_data:
+    st.session_state.annos[st.session_state.page_index] = json_data["objects"]
+
+# ---------------------------
+# Footer
+# ---------------------------
+st.write("")
+st.markdown("<div class='subtle'>เคล็ดลับ: หากต้องการแก้ไขข้อความยาว ๆ ให้ใช้เมนู “แปลง PDF เป็น Word” แล้วค่อยอัปโหลดกลับมา</div>", unsafe_allow_html=True)
