@@ -35,8 +35,7 @@ def get_page_count(pdf_bytes: bytes) -> int:
 def hex_to_rgb(h: Optional[str]):
     if not h:
         return None
-    h = h.lstrip("#")
-    # รับเฉพาะ #RRGGBB
+    h = h.lstrip("#")  # รับเฉพาะ #RRGGBB
     return tuple(int(h[i:i+2], 16)/255 for i in (0, 2, 4))
 
 def resolve_font(font_filename: Optional[str]):
@@ -78,7 +77,7 @@ def apply_annotations_to_pdf(
             t = item.get("type")
             props = item.get("props", {})
             stroke = props.get("stroke", "#000000")
-            fill = props.get("fill", None)  # จะเป็น None เมื่อเลือกโปร่งใส
+            fill = props.get("fill", None)  # ถ้าโปร่งใสจะเป็น None
             line_w = float(props.get("strokeWidth", 2))
 
             if t in ("rect", "ellipse"):
@@ -146,9 +145,14 @@ zoom = st.sidebar.slider("ซูมหน้ากระดาษ (%)", 50, 200,
 stroke_width = st.sidebar.slider("ความหนาเส้น", 1, 12, 3)
 stroke_color = st.sidebar.color_picker("สีเส้น/ข้อความ", "#111827")
 
-# ใช้ checkbox ระบุโปร่งใสแทนค่า #00000000
+# เลือกโปร่งใส/ไม่โปร่งใส โดยไม่ส่ง None เข้า canvas
 use_fill = st.sidebar.checkbox("เติมสีพื้น (ไม่โปร่งใส)", value=False)
-fill_color = st.sidebar.color_picker("เลือกสีพื้น", "#000000") if use_fill else None
+if use_fill:
+    fill_color = st.sidebar.color_picker("เลือกสีพื้น", "#000000")
+    canvas_fill = fill_color  # #RRGGBB
+else:
+    fill_color = None
+    canvas_fill = "rgba(0,0,0,0)"  # โปร่งใส (string)
 
 font_size = st.sidebar.slider("ขนาดตัวอักษร", 10, 72, 20)
 dpi = st.sidebar.slider("DPI เรนเดอร์", 96, 200, 120)
@@ -205,7 +209,7 @@ mapping = {
 }
 
 json_data = st_canvas(
-    fill_color=fill_color if use_fill else None,
+    fill_color=canvas_fill,                # << สำคัญ: ส่ง string เสมอ
     stroke_width=stroke_width,
     stroke_color=stroke_color,
     background_image=img_disp,
