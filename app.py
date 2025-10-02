@@ -85,48 +85,59 @@ def edit_pdf_with_elements(pdf_file, text_elements):
     return output
 
 # ฟังก์ชัน Interactive Editor Component
-def interactive_pdf_editor():
+def interactive_pdf_editor(pdf_file=None):
     """แสดง Interactive PDF Editor"""
     
-    html_code = """
+    # แปลง PDF เป็น base64 ถ้ามี
+    pdf_base64 = ""
+    if pdf_file:
+        try:
+            # อ่านหน้าแรกของ PDF
+            pdf_bytes = pdf_file.read()
+            pdf_file.seek(0)
+            pdf_base64 = base64.b64encode(pdf_bytes).decode()
+        except:
+            pass
+    
+    html_code = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
         <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body {
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{
                 font-family: 'Segoe UI', sans-serif;
                 background: #f5f5f5;
                 padding: 20px;
-            }
-            .editor-container {
+            }}
+            .editor-container {{
                 max-width: 1200px;
                 margin: 0 auto;
                 background: white;
                 border-radius: 10px;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            }
-            .toolbar {
+            }}
+            .toolbar {{
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 padding: 20px;
                 border-radius: 10px 10px 0 0;
                 color: white;
-            }
-            .toolbar h2 { margin-bottom: 15px; }
-            .controls {
+            }}
+            .toolbar h2 {{ margin-bottom: 15px; }}
+            .controls {{
                 display: grid;
                 grid-template-columns: 1fr 1fr 1fr;
                 gap: 10px;
                 margin-bottom: 15px;
-            }
-            .controls input, .controls select {
+            }}
+            .controls input, .controls select {{
                 padding: 8px;
                 border: none;
                 border-radius: 5px;
                 font-size: 14px;
-            }
-            textarea {
+            }}
+            textarea {{
                 width: 100%;
                 padding: 10px;
                 border: none;
@@ -134,40 +145,40 @@ def interactive_pdf_editor():
                 resize: vertical;
                 min-height: 60px;
                 font-family: inherit;
-            }
-            .btn {
+            }}
+            .btn {{
                 padding: 10px 20px;
                 border: none;
                 border-radius: 5px;
                 cursor: pointer;
                 font-weight: 600;
                 transition: all 0.3s;
-            }
-            .btn-add {
+            }}
+            .btn-add {{
                 background: white;
                 color: #667eea;
                 width: 100%;
                 margin-top: 10px;
-            }
-            .btn-add:hover {
+            }}
+            .btn-add:hover {{
                 background: #f0f0f0;
-            }
-            .btn-save {
+            }}
+            .btn-save {{
                 background: #28a745;
                 color: white;
                 width: 100%;
                 margin-top: 10px;
-            }
-            .btn-clear {
+            }}
+            .btn-clear {{
                 background: #dc3545;
                 color: white;
                 width: 100%;
-            }
-            .canvas-wrapper {
+            }}
+            .canvas-wrapper {{
                 padding: 20px;
                 min-height: 600px;
-            }
-            #canvas {
+            }}
+            #canvas {{
                 width: 595px;
                 height: 842px;
                 border: 2px solid #ddd;
@@ -175,8 +186,17 @@ def interactive_pdf_editor():
                 position: relative;
                 background: white;
                 box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            }
-            .text-element {
+            }}
+            #pdfPreview {{
+                width: 100%;
+                height: 100%;
+                object-fit: contain;
+                position: absolute;
+                top: 0;
+                left: 0;
+                pointer-events: none;
+            }}
+            .text-element {{
                 position: absolute;
                 cursor: move;
                 padding: 5px;
@@ -184,16 +204,17 @@ def interactive_pdf_editor():
                 user-select: none;
                 white-space: pre-wrap;
                 word-wrap: break-word;
-            }
-            .text-element:hover {
+                z-index: 10;
+            }}
+            .text-element:hover {{
                 border-color: #667eea;
                 background: rgba(102, 126, 234, 0.1);
-            }
-            .text-element.selected {
+            }}
+            .text-element.selected {{
                 border-color: #667eea;
                 background: rgba(102, 126, 234, 0.15);
-            }
-            .delete-btn {
+            }}
+            .delete-btn {{
                 position: absolute;
                 top: -12px;
                 right: -12px;
@@ -207,11 +228,11 @@ def interactive_pdf_editor():
                 display: none;
                 font-size: 14px;
                 line-height: 1;
-            }
-            .text-element:hover .delete-btn {
+            }}
+            .text-element:hover .delete-btn {{
                 display: block;
-            }
-            .resize-handle {
+            }}
+            .resize-handle {{
                 position: absolute;
                 bottom: -5px;
                 right: -5px;
@@ -221,17 +242,27 @@ def interactive_pdf_editor():
                 cursor: nwse-resize;
                 border-radius: 50%;
                 display: none;
-            }
-            .text-element:hover .resize-handle {
+            }}
+            .text-element:hover .resize-handle {{
                 display: block;
-            }
-            .info-box {
+            }}
+            .info-box {{
                 background: #e7f3ff;
                 padding: 15px;
                 border-radius: 5px;
                 margin-bottom: 15px;
                 border-left: 4px solid #667eea;
-            }
+                color: #333;
+                font-weight: 500;
+            }}
+            @font-face {{
+                font-family: 'THSarabunPSK';
+                src: url('data:font/truetype;charset=utf-8;base64,') format('truetype');
+            }}
+            @font-face {{
+                font-family: 'THSarabunNew';
+                src: url('data:font/truetype;charset=utf-8;base64,') format('truetype');
+            }}
         </style>
     </head>
     <body>
@@ -250,6 +281,8 @@ def interactive_pdf_editor():
                         <option value="Helvetica">Helvetica</option>
                         <option value="Times New Roman">Times</option>
                         <option value="Courier New">Courier</option>
+                        <option value="THSarabunPSK">TH Sarabun PSK</option>
+                        <option value="THSarabunNew">TH Sarabun New</option>
                     </select>
                     <input type="number" id="fontSize" value="16" min="8" max="72" placeholder="ขนาด">
                     <input type="color" id="textColor" value="#000000">
@@ -263,10 +296,13 @@ def interactive_pdf_editor():
             </div>
             
             <div class="canvas-wrapper">
-                <div id="canvas"></div>
+                <div id="canvas">
+                    <canvas id="pdfCanvas" style="display:none;"></canvas>
+                </div>
             </div>
         </div>
 
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
         <script>
             let textElements = [];
             let elementCounter = 0;
@@ -275,14 +311,45 @@ def interactive_pdf_editor():
             let isResizing = false;
             let startX, startY, startLeft, startTop, startFontSize;
 
-            function addText() {
+            // โหลด PDF
+            const pdfData = '{pdf_base64}';
+            if (pdfData) {{
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                
+                const loadingTask = pdfjsLib.getDocument({{data: atob(pdfData)}});
+                loadingTask.promise.then(function(pdf) {{
+                    pdf.getPage(1).then(function(page) {{
+                        const canvas = document.getElementById('pdfCanvas');
+                        const context = canvas.getContext('2d');
+                        const viewport = page.getViewport({{scale: 1.4}});
+                        
+                        canvas.height = viewport.height;
+                        canvas.width = viewport.width;
+                        canvas.style.display = 'block';
+                        canvas.style.position = 'absolute';
+                        canvas.style.top = '0';
+                        canvas.style.left = '0';
+                        canvas.style.width = '100%';
+                        canvas.style.height = '100%';
+                        canvas.style.pointerEvents = 'none';
+                        
+                        const renderContext = {{
+                            canvasContext: context,
+                            viewport: viewport
+                        }};
+                        page.render(renderContext);
+                    }});
+                }});
+            }}
+
+            function addText() {{
                 const text = document.getElementById('textInput').value;
-                if (!text.trim()) {
+                if (!text.trim()) {{
                     alert('กรุณาใส่ข้อความ');
                     return;
-                }
+                }}
 
-                const element = {
+                const element = {{
                     id: ++elementCounter,
                     text: text,
                     x: 50,
@@ -291,14 +358,14 @@ def interactive_pdf_editor():
                     font: document.getElementById('fontSelect').value,
                     color: document.getElementById('textColor').value,
                     page: 1
-                };
+                }};
 
                 textElements.push(element);
                 createTextElement(element);
                 document.getElementById('textInput').value = '';
-            }
+            }}
 
-            function createTextElement(el) {
+            function createTextElement(el) {{
                 const canvas = document.getElementById('canvas');
                 const div = document.createElement('div');
                 div.className = 'text-element';
@@ -313,10 +380,10 @@ def interactive_pdf_editor():
                 const deleteBtn = document.createElement('button');
                 deleteBtn.className = 'delete-btn';
                 deleteBtn.textContent = '×';
-                deleteBtn.onclick = (e) => {
+                deleteBtn.onclick = (e) => {{
                     e.stopPropagation();
                     deleteText(el.id);
-                };
+                }};
                 div.appendChild(deleteBtn);
 
                 const resizeHandle = document.createElement('div');
@@ -327,9 +394,9 @@ def interactive_pdf_editor():
                 resizeHandle.addEventListener('mousedown', (e) => startResize(e, el));
 
                 canvas.appendChild(div);
-            }
+            }}
 
-            function startDrag(e, el) {
+            function startDrag(e, el) {{
                 if (e.target.className === 'resize-handle') return;
                 selectedElement = el;
                 isDragging = true;
@@ -340,18 +407,18 @@ def interactive_pdf_editor():
                 
                 const div = document.getElementById('text-' + el.id);
                 div.classList.add('selected');
-            }
+            }}
 
-            function startResize(e, el) {
+            function startResize(e, el) {{
                 e.stopPropagation();
                 selectedElement = el;
                 isResizing = true;
                 startY = e.clientY;
                 startFontSize = el.fontSize;
-            }
+            }}
 
-            document.addEventListener('mousemove', (e) => {
-                if (isDragging && selectedElement) {
+            document.addEventListener('mousemove', (e) => {{
+                if (isDragging && selectedElement) {{
                     const dx = e.clientX - startX;
                     const dy = e.clientY - startY;
                     
@@ -361,13 +428,64 @@ def interactive_pdf_editor():
                     const div = document.getElementById('text-' + selectedElement.id);
                     div.style.left = selectedElement.x + 'px';
                     div.style.top = selectedElement.y + 'px';
-                }
+                }}
                 
-                if (isResizing && selectedElement) {
+                if (isResizing && selectedElement) {{
                     const dy = e.clientY - startY;
                     const newSize = Math.max(8, Math.min(72, startFontSize + dy));
                     
                     selectedElement.fontSize = newSize;
+                    const div = document.getElementById('text-' + selectedElement.id);
+                    div.style.fontSize = newSize + 'px';
+                }}
+            }});
+
+            document.addEventListener('mouseup', () => {{
+                if (selectedElement) {{
+                    const div = document.getElementById('text-' + selectedElement.id);
+                    div.classList.remove('selected');
+                }}
+                isDragging = false;
+                isResizing = false;
+                selectedElement = null;
+            }});
+
+            function deleteText(id) {{
+                textElements = textElements.filter(el => el.id !== id);
+                const div = document.getElementById('text-' + id);
+                if (div) div.remove();
+            }}
+
+            function clearAll() {{
+                if (confirm('ลบข้อความทั้งหมด?')) {{
+                    textElements.forEach(el => {{
+                        const div = document.getElementById('text-' + el.id);
+                        if (div) div.remove();
+                    }});
+                    textElements = [];
+                }}
+            }}
+
+            function savePDF() {{
+                if (textElements.length === 0) {{
+                    alert('กรุณาเพิ่มข้อความก่อน');
+                    return;
+                }}
+                
+                window.parent.postMessage({{
+                    type: 'pdf_data',
+                    elements: textElements
+                }}, '*');
+                
+                alert('✅ บันทึกข้อมูลสำเร็จ! กรุณากดปุ่ม "สร้าง PDF" ด้านล่าง');
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    
+    # แสดง component
+    components.html(html_code, height=1000, scrolling=True)
                     const div = document.getElementById('text-' + selectedElement.id);
                     div.style.fontSize = newSize + 'px';
                 }
@@ -438,59 +556,94 @@ if feature == "✏️ แก้ไข PDF (Interactive)":
         
         st.success(f"✅ อัปโหลดไฟล์สำเร็จ: {uploaded_file.name}")
         
-        # แสดง Interactive Editor
-        st.markdown("---")
-        interactive_pdf_editor()
+        # อ่านข้อมูล PDF
+        reader = PdfReader(uploaded_file)
+        total_pages = len(reader.pages)
+        st.info(f"📄 ไฟล์มี {total_pages} หน้า")
         
-        # รับข้อมูลจาก JavaScript (ใช้ session state แทน)
-        if 'text_elements' not in st.session_state:
-            st.session_state.text_elements = []
+        # แสดง Interactive Editor พร้อม PDF
+        st.markdown("---")
+        interactive_pdf_editor(uploaded_file)
+        
+        # รับข้อมูลจาก JavaScript
+        st.markdown("---")
+        st.subheader("📝 เพิ่มข้อมูลเพื่อสร้าง PDF")
+        
+        # Manual input สำหรับเพิ่มข้อมูล
+        with st.expander("➕ เพิ่มข้อความด้วยมือ (หรือใช้ Interactive Editor ด้านบน)", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                text = st.text_area("ข้อความ", key="manual_text")
+                x = st.number_input("ตำแหน่ง X", 0, 600, 50, key="manual_x")
+                y = st.number_input("ตำแหน่ง Y", 0, 800, 100, key="manual_y")
+            with col2:
+                font = st.selectbox("ฟอนต์", ["Helvetica", "Times-Roman", "Courier"], key="manual_font")
+                size = st.number_input("ขนาด", 8, 72, 16, key="manual_size")
+                color = st.color_picker("สี", "#000000", key="manual_color")
+            
+            if st.button("➕ เพิ่มข้อความนี้"):
+                if text:
+                    if 'text_elements' not in st.session_state:
+                        st.session_state.text_elements = []
+                    st.session_state.text_elements.append({
+                        'text': text,
+                        'x': x,
+                        'y': y,
+                        'fontSize': size,
+                        'font': font,
+                        'color': color,
+                        'page': 1
+                    })
+                    st.success("✅ เพิ่มข้อความแล้ว!")
+                    st.rerun()
         
         # แสดงข้อมูลที่บันทึก
-        if st.session_state.text_elements:
+        if 'text_elements' in st.session_state and st.session_state.text_elements:
             st.markdown("---")
-            st.subheader("📝 ข้อมูลที่บันทึก")
-            st.json(st.session_state.text_elements)
+            st.subheader("📋 ข้อความที่เพิ่มไว้")
             
-            if st.button("🎨 สร้าง PDF จากข้อมูลนี้", type="primary"):
-                with st.spinner("กำลังสร้าง PDF..."):
-                    edited_pdf = edit_pdf_with_elements(
-                        uploaded_file,
-                        st.session_state.text_elements
-                    )
-                    
-                    st.success("✅ สร้าง PDF สำเร็จ!")
-                    st.download_button(
-                        label="📥 ดาวน์โหลด PDF",
-                        data=edited_pdf,
-                        file_name="edited.pdf",
-                        mime="application/pdf"
-                    )
-        
-        # Manual input (fallback)
-        with st.expander("🔧 หรือเพิ่มข้อมูลด้วยมือ"):
-            text = st.text_area("ข้อความ")
-            col1, col2, col3 = st.columns(3)
+            # แสดงรายการ
+            for i, el in enumerate(st.session_state.text_elements):
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.text(f"{i+1}. {el['text'][:50]}... (ตำแหน่ง: {el['x']}, {el['y']} | ขนาด: {el['fontSize']}px)")
+                with col2:
+                    if st.button("🗑️", key=f"del_{i}"):
+                        st.session_state.text_elements.pop(i)
+                        st.rerun()
+            
+            # แสดงข้อมูล JSON
+            with st.expander("📊 ดูข้อมูล JSON"):
+                st.json(st.session_state.text_elements)
+            
+            # ปุ่มสร้าง PDF
+            st.markdown("---")
+            col1, col2 = st.columns(2)
             with col1:
-                x = st.number_input("X", 0, 600, 50)
-            with col2:
-                y = st.number_input("Y", 0, 800, 100)
-            with col3:
-                size = st.number_input("ขนาด", 8, 72, 16)
-            
-            if st.button("➕ เพิ่ม"):
-                if 'text_elements' not in st.session_state:
+                if st.button("🗑️ ล้างข้อมูลทั้งหมด", use_container_width=True):
                     st.session_state.text_elements = []
-                st.session_state.text_elements.append({
-                    'text': text,
-                    'x': x,
-                    'y': y,
-                    'fontSize': size,
-                    'font': 'Helvetica',
-                    'color': '#000000',
-                    'page': 1
-                })
-                st.rerun()
+                    st.rerun()
+            with col2:
+                if st.button("🎨 สร้าง PDF", type="primary", use_container_width=True):
+                    with st.spinner("กำลังสร้าง PDF..."):
+                        try:
+                            edited_pdf = edit_pdf_with_elements(
+                                uploaded_file,
+                                st.session_state.text_elements
+                            )
+                            
+                            st.success("✅ สร้าง PDF สำเร็จ!")
+                            st.download_button(
+                                label="📥 ดาวน์โหลด PDF ที่แก้ไขแล้ว",
+                                data=edited_pdf,
+                                file_name="edited_" + uploaded_file.name,
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                        except Exception as e:
+                            st.error(f"❌ เกิดข้อผิดพลาด: {str(e)}")
+        else:
+            st.info("👆 ใช้ Interactive Editor ด้านบนเพื่อเพิ่มข้อความ หรือเพิ่มด้วยมือในส่วน 'เพิ่มข้อความด้วยมือ'")
 
 # รวมไฟล์ PDF
 elif feature == "🔗 รวมไฟล์ PDF":
