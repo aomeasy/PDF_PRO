@@ -1,11 +1,4 @@
-# app.py
-# Streamlit PDF editor (Cloud friendly) — ใช้ PyMuPDF เรนเดอร์ภาพ (ไม่ต้องใช้ poppler)
-# รองรับการเลือกฟอนต์จากโฟลเดอร์ fonts/ แล้วฝังลง PDF
-# Run locally: streamlit run app.py
-
-import io
-import os
-import glob
+import io, os, glob
 from typing import Dict, List, Any, Optional
 
 import streamlit as st
@@ -13,129 +6,62 @@ from streamlit_drawable_canvas import st_canvas
 import fitz  # PyMuPDF
 from PIL import Image
 
-# ---------------------------
-# App Config
-# ---------------------------
-st.set_page_config(
-    page_title="PDF Editor — Minimal PRO",
-    page_icon="📝",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ---------------- Config ----------------
+st.set_page_config(page_title="PDF Editor", page_icon="📝", layout="wide")
 
-PRIMARY = "#0F172A"   # slate-900
-SECONDARY = "#334155" # slate-700
-ACCENT = "#2563EB"    # blue-600
-BG_SOFT = "#F8FAFC"   # slate-50
-BORDER = "#E2E8F0"    # slate-200
-
-st.markdown(
-    f"""
-    <style>
-    .block-container {{max-width: 1300px; padding-top: 1rem;}}
-    header {{ visibility: hidden; }}
-    .topbar {{
-        display:flex; align-items:center; gap:.75rem; padding:.75rem 1rem;
-        background:{BG_SOFT}; border:1px solid {BORDER}; border-radius:14px;
-    }}
-    .brand {{ font-weight:700; letter-spacing:.2px; color:{PRIMARY}; }}
-    .pill {{
-        padding:.15rem .6rem; border:1px solid {BORDER}; border-radius:999px;
-        font-size:.8rem; color:{SECONDARY};
-    }}
-    .subtle {{ color:{SECONDARY}; font-size:.9rem; }}
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-with st.container():
-    col_l, col_r = st.columns([1, 3])
-    with col_l:
-        st.markdown(
-            f"""
-            <div class="topbar">
-                <span class="brand">PDF Editor</span>
-                <span class="pill">ฟรี</span>
-                <span class="pill">ออนไลน์</span>
-                <span class="pill">โทนมินิมอล</span>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    with col_r:
-        st.write("")
-
-st.write("")
-
-# ---------------------------
-# Utils
-# ---------------------------
+# ---------------- Utils ----------------
 @st.cache_data(show_spinner=False)
-def list_fonts(font_dir: str = "fonts") -> List[str]:
+def list_fonts(font_dir="fonts") -> List[str]:
     if not os.path.isdir(font_dir):
         return []
     files = sorted(glob.glob(os.path.join(font_dir, "*.ttf")) + glob.glob(os.path.join(font_dir, "*.otf")))
     return [os.path.basename(f) for f in files]
 
 @st.cache_data(show_spinner=False)
-def render_pdf_to_images_pymupdf(pdf_bytes: bytes, dpi: int = 150) -> List[Image.Image]:
-    """เรนเดอร์หน้า PDF เป็น PIL.Image ด้วย PyMuPDF (ไม่ต้องใช้ poppler)"""
-    images: List[Image.Image] = []
+def render_page_image(pdf_bytes: bytes, page_index: int, dpi: int) -> Image.Image:
+    """เรนเดอร์หน้าเดียวเป็นภาพ (Lazy-render)"""
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-        zoom = dpi / 72.0  # 72 dpi = scale 1.0
+        zoom = dpi / 72.0
         mat = fitz.Matrix(zoom, zoom)
-        for page in doc:
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            images.append(img)
-    return images
+        page = doc[page_index]
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+@st.cache_data(show_spinner=False)
+def get_page_count(pdf_bytes: bytes) -> int:
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        return len(doc)
 
 def hex_to_rgb(h: Optional[str]):
-    if not h or h == "#00000000":
+    if not h:
         return None
     h = h.lstrip("#")
-    if len(h) == 8:  # RGBA → ตัด alpha
-        h = h[:6]
+    # รับเฉพาะ #RRGGBB
     return tuple(int(h[i:i+2], 16)/255 for i in (0, 2, 4))
 
-def resolve_font(font_filename: Optional[str]) -> (Optional[str], Optional[str]):
-    """
-    รับชื่อไฟล์ฟอนต์จากโฟลเดอร์ fonts/ (เช่น 'Sarabun-Regular.ttf')
-    คืน (fontname_tag, full_path) สำหรับใช้กับ PyMuPDF
-    ถ้าไม่พบ จะคืน (None, None) เพื่อใช้ฟอนต์เริ่มต้นของ PDF
-    """
+def resolve_font(font_filename: Optional[str]):
+    """คืน (fontname_tag, full_path) จากไฟล์ใน fonts/; ถ้าไม่เจอคืน (None, None)"""
     if not font_filename:
         return None, None
-    font_path = os.path.join("fonts", font_filename)
-    if not os.path.isfile(font_path):
+    path = os.path.join("fonts", font_filename)
+    if not os.path.isfile(path):
         return None, None
-    # ใช้ชื่อไฟล์ (ไม่รวมสกุล) เป็น tag
-    fontname_tag = os.path.splitext(os.path.basename(font_path))[0]
-    return fontname_tag, font_path
+    tag = os.path.splitext(os.path.basename(path))[0]
+    return tag, path
 
 def apply_annotations_to_pdf(
     src_pdf: bytes,
     annotations: Dict[int, List[Dict[str, Any]]],
-    dpi_used: int,
+    disp_sizes: Dict[int, tuple],
     selected_font_filename: Optional[str]
 ) -> bytes:
-    """
-    วาดวัตถุจากแคนวาสกลับเข้า PDF ด้วย PyMuPDF
-    - แมปพิกัดจากขนาดภาพ (เรนเดอร์ด้วย dpi_used) → ขนาดหน้าจริงของ PDF
-    - รองรับฝังฟอนต์จากโฟลเดอร์ fonts/ เมื่อใส่ข้อความ
-    """
+    """รวม annotation กลับเข้า PDF โดยแมปพิกัดจากขนาดแสดงผล (disp_sizes) → ขนาดหน้าจริง"""
     doc = fitz.open(stream=src_pdf, filetype="pdf")
     out = io.BytesIO()
 
-    # เตรียมอ้างอิงขนาดภาพตาม dpi_used
-    ref_images = render_pdf_to_images_pymupdf(src_pdf, dpi=dpi_used)
-
-    # เตรียมฟอนต์ (ถ้าเลือก)
-    fontname_tag, font_path = resolve_font(selected_font_filename)
-    if fontname_tag and font_path:
-        # register ฟอนต์ระดับเอกสาร (เรียกครั้งเดียวใช้ได้ทุกหน้า)
-        doc.insert_font(fontname=fontname_tag, fontfile=font_path)
+    font_tag, font_path = resolve_font(selected_font_filename)
+    if font_tag and font_path:
+        doc.insert_font(fontname=font_tag, fontfile=font_path)
 
     for page_index in range(len(doc)):
         page = doc[page_index]
@@ -145,47 +71,39 @@ def apply_annotations_to_pdf(
         if not items:
             continue
 
-        ref_img = ref_images[page_index]
-        disp_w, disp_h = ref_img.size
-
-        sx = page_w / disp_w
-        sy = page_h / disp_h
+        disp_w, disp_h = disp_sizes.get(page_index, (page_w, page_h))
+        sx, sy = page_w / disp_w, page_h / disp_h
 
         for item in items:
             t = item.get("type")
             props = item.get("props", {})
             stroke = props.get("stroke", "#000000")
-            fill = props.get("fill", None)
+            fill = props.get("fill", None)  # จะเป็น None เมื่อเลือกโปร่งใส
             line_w = float(props.get("strokeWidth", 2))
 
             if t in ("rect", "ellipse"):
-                left = float(props.get("left", 0)) * sx
-                top = float(props.get("top", 0)) * sy
-                width = float(props.get("width", 0)) * sx
-                height = float(props.get("height", 0)) * sy
-                rect = fitz.Rect(left, top, left + width, top + height)
-
+                left  = float(props.get("left", 0))   * sx
+                top   = float(props.get("top", 0))    * sy
+                width = float(props.get("width", 0))  * sx
+                height= float(props.get("height", 0)) * sy
+                rect = fitz.Rect(left, top, left+width, top+height)
                 if t == "rect":
                     page.draw_rect(
                         rect,
                         color=hex_to_rgb(stroke),
-                        fill=hex_to_rgb(fill) if fill and fill != "#00000000" else None,
-                        width=line_w,
+                        fill=hex_to_rgb(fill) if fill else None,
+                        width=line_w
                     )
                 else:
                     page.draw_oval(
                         rect,
                         color=hex_to_rgb(stroke),
-                        fill=hex_to_rgb(fill) if fill and fill != "#00000000" else None,
-                        width=line_w,
+                        fill=hex_to_rgb(fill) if fill else None,
+                        width=line_w
                     )
 
             elif t == "path":
-                pts = []
-                for p in props.get("path", []):
-                    x = float(p[1]) * sx
-                    y = float(p[2]) * sy
-                    pts.append((x, y))
+                pts = [(float(p[1])*sx, float(p[2])*sy) for p in props.get("path", [])]
                 if len(pts) >= 2:
                     page.draw_polyline(pts, color=hex_to_rgb(stroke), width=line_w)
 
@@ -194,194 +112,113 @@ def apply_annotations_to_pdf(
                 y1 = float(props.get("y1", 0)) * sy
                 x2 = float(props.get("x2", 0)) * sx
                 y2 = float(props.get("y2", 0)) * sy
-                page.draw_line(fitz.Point(x1, y1), fitz.Point(x2, y2), color=hex_to_rgb(stroke), width=line_w)
+                page.draw_line(fitz.Point(x1, y1), fitz.Point(x2, y2),
+                               color=hex_to_rgb(stroke), width=line_w)
 
             elif t == "text":
-                text_val = props.get("text", "")
-                if not text_val:
+                txt  = props.get("text", "")
+                if not txt:
                     continue
                 left = float(props.get("left", 0)) * sx
-                top = float(props.get("top", 0)) * sy
+                top  = float(props.get("top", 0))  * sy
                 size = float(props.get("fontSize", 14))
-
-                # ถ้าเลือกฟอนต์ได้จะใช้ฟอนต์นั้น ไม่งั้นใช้ฟอนต์ default
-                if fontname_tag:
-                    page.insert_text(
-                        fitz.Point(left, top + size),
-                        text_val,
-                        fontsize=size,
-                        fontname=fontname_tag,
-                        color=hex_to_rgb(stroke),
-                    )
-                else:
-                    page.insert_text(
-                        fitz.Point(left, top + size),
-                        text_val,
-                        fontsize=size,
-                        color=hex_to_rgb(stroke),
-                    )
+                kwargs = dict(fontsize=size, color=hex_to_rgb(stroke))
+                if font_tag:
+                    kwargs["fontname"] = font_tag
+                page.insert_text(fitz.Point(left, top + size), txt, **kwargs)
 
     doc.save(out)
     doc.close()
     return out.getvalue()
 
-# ---------------------------
-# State
-# ---------------------------
+# ---------------- State ----------------
 if "pdf_bytes" not in st.session_state:
     st.session_state.pdf_bytes = None
-if "images" not in st.session_state:
-    st.session_state.images = []
 if "page_index" not in st.session_state:
     st.session_state.page_index = 0
 if "annos" not in st.session_state:
-    st.session_state.annos = {}  # page_index -> list objects
+    st.session_state.annos = {}
+if "disp_sizes" not in st.session_state:
+    st.session_state.disp_sizes = {}
 
-# ---------------------------
-# Sidebar (Controls)
-# ---------------------------
-with st.sidebar:
-    st.markdown("### ขั้นตอน")
-    st.markdown("1) อัปโหลด PDF  \n2) แก้ไขบนแคนวาส  \n3) บันทึก/ดาวน์โหลด")
-    st.divider()
-    zoom = st.slider("ซูมหน้ากระดาษ", 50, 220, 120, help="ปรับขนาดแสดงผลหน้า PDF")
-    stroke_width = st.slider("ความหนาเส้น", 1, 12, 3)
-    stroke_color = st.color_picker("สีเส้น/ข้อความ", "#111827")
-    fill_color = st.color_picker("สีพื้นวัตถุ (โปร่งใสไว้สวยกว่า)", "#00000000")
-    font_size = st.slider("ขนาดตัวอักษร", 10, 72, 20)
-    dpi = st.slider("คุณภาพเรนเดอร์ (DPI)", 96, 220, 150,
-                    help="ค่ามาก = ชัดขึ้น แต่ใช้หน่วยความจำมากขึ้น")
+# ---------------- Sidebar ----------------
+zoom = st.sidebar.slider("ซูมหน้ากระดาษ (%)", 50, 200, 120)
+stroke_width = st.sidebar.slider("ความหนาเส้น", 1, 12, 3)
+stroke_color = st.sidebar.color_picker("สีเส้น/ข้อความ", "#111827")
 
-    st.divider()
-    st.markdown("### ฟอนต์ (จากโฟลเดอร์ `fonts/`)")
-    fonts = list_fonts("fonts")
-    selected_font = st.selectbox(
-        "เลือกไฟล์ฟอนต์ (.ttf/.otf)",
-        options=(["(ค่าเริ่มต้นของระบบ)"] + fonts) if fonts else ["(ไม่มีฟอนต์ในโฟลเดอร์)"],
-        index=0
-    )
-    chosen_font_filename = None
-    if fonts and selected_font != "(ค่าเริ่มต้นของระบบ)":
-        chosen_font_filename = selected_font
-    if not fonts:
-        st.caption("ใส่ไฟล์ฟอนต์ในโฟลเดอร์ `fonts/` เพื่อให้เลือกได้ที่นี่")
+# ใช้ checkbox ระบุโปร่งใสแทนค่า #00000000
+use_fill = st.sidebar.checkbox("เติมสีพื้น (ไม่โปร่งใส)", value=False)
+fill_color = st.sidebar.color_picker("เลือกสีพื้น", "#000000") if use_fill else None
 
-# ---------------------------
-# Upload
-# ---------------------------
-uploaded = st.file_uploader("เลือกไฟล์ PDF เพื่อเริ่มแก้ไข", type=["pdf"], label_visibility="collapsed")
+font_size = st.sidebar.slider("ขนาดตัวอักษร", 10, 72, 20)
+dpi = st.sidebar.slider("DPI เรนเดอร์", 96, 200, 120)
 
-if uploaded is not None:
+fonts = list_fonts("fonts")
+selected_font = st.sidebar.selectbox("เลือกฟอนต์จาก fonts/", ["(default)"] + fonts)
+chosen_font = selected_font if selected_font != "(default)" else None
+
+# ---------------- Upload ----------------
+uploaded = st.file_uploader("อัปโหลด PDF", type="pdf")
+if uploaded:
     st.session_state.pdf_bytes = uploaded.read()
-    st.session_state.images = render_pdf_to_images_pymupdf(st.session_state.pdf_bytes, dpi=dpi)
     st.session_state.page_index = 0
-    for i in range(len(st.session_state.images)):
+    st.session_state.n_pages = get_page_count(st.session_state.pdf_bytes)
+    for i in range(st.session_state.n_pages):
         st.session_state.annos.setdefault(i, [])
 
 if not st.session_state.pdf_bytes:
-    st.info("อัปโหลดไฟล์ PDF เพื่อเริ่มใช้งาน")
+    st.info("อัปโหลดไฟล์เพื่อเริ่มใช้งาน")
     st.stop()
 
-# ---------------------------
-# Pager + Actions
-# ---------------------------
-pages = st.session_state.images
-n_pages = len(pages)
-
-c1, c2, c3, c4 = st.columns([2, 2, 2, 6], vertical_alignment="center")
+# ---------------- Pager ----------------
+c1, c2, c3, c4 = st.columns([2, 2, 2, 6])
 with c1:
-    st.markdown("**เลือกหน้า**")
-    page_i = st.number_input(
-        "page",
-        min_value=1,
-        max_value=n_pages,
-        value=st.session_state.page_index + 1,
-        label_visibility="collapsed",
-    )
-    if page_i - 1 != st.session_state.page_index:
-        st.session_state.page_index = page_i - 1
-
+    page_i = st.number_input("หน้า", 1, st.session_state.n_pages, st.session_state.page_index + 1)
+    st.session_state.page_index = page_i - 1
 with c2:
-    if st.button("ล้างการแก้ไขหน้านี้", use_container_width=True):
+    if st.button("ล้างหน้านี้", use_container_width=True):
         st.session_state.annos[st.session_state.page_index] = []
-
 with c3:
     if st.button("บันทึกเป็น PDF", type="primary", use_container_width=True):
-        with st.spinner("กำลังรวมการแก้ไขกลับเข้า PDF..."):
-            pdf_out = apply_annotations_to_pdf(
-                st.session_state.pdf_bytes,
-                st.session_state.annos,
-                dpi_used=dpi,
-                selected_font_filename=chosen_font_filename,
-            )
-        st.download_button(
-            "ดาวน์โหลดไฟล์",
-            data=pdf_out,
-            file_name="edited.pdf",
-            mime="application/pdf",
-            use_container_width=True,
+        pdf_out = apply_annotations_to_pdf(
+            st.session_state.pdf_bytes,
+            st.session_state.annos,
+            st.session_state.disp_sizes,
+            selected_font_filename=chosen_font
         )
+        st.download_button("ดาวน์โหลด", pdf_out, "edited.pdf", "application/pdf", use_container_width=True)
 
-with c4:
-    st.markdown('<div class="subtle">การเปลี่ยนแปลงจะยังไม่เขียนทับจนกว่าจะกด “บันทึกเป็น PDF”</div>', unsafe_allow_html=True)
-
-st.divider()
-
-# ---------------------------
-# Canvas
-# ---------------------------
-img = pages[st.session_state.page_index]
-disp_w = int(img.size[0] * (zoom / 100))
-disp_h = int(img.size[1] * (zoom / 100))
+# ---------------- Canvas ----------------
+img = render_page_image(st.session_state.pdf_bytes, st.session_state.page_index, dpi)
+disp_w, disp_h = int(img.size[0] * (zoom / 100)), int(img.size[1] * (zoom / 100))
 img_disp = img.resize((disp_w, disp_h))
+st.session_state.disp_sizes[st.session_state.page_index] = (disp_w, disp_h)
 
-toolbar_col, canvas_col = st.columns([1.6, 5])
+mode = st.radio("โหมด", ["เส้น", "สี่เหลี่ยม", "วงรี", "เส้นตรง", "ข้อความ", "ลบ"], horizontal=True)
+mapping = {
+    "เส้น": "freedraw",
+    "สี่เหลี่ยม": "rect",
+    "วงรี": "ellipse",
+    "เส้นตรง": "line",
+    "ข้อความ": "text",
+    "ลบ": "transform",
+}
 
-with toolbar_col:
-    st.markdown("#### เครื่องมือ")
-    mode = st.segmented_control(
-        "โหมด",
-        options=["🖊️ เส้น", "⬛ สี่เหลี่ยม", "⚪ วงรี", "↔️ เส้นตรง", "🔤 ข้อความ", "🧽 ลบ"],
-        default="🖊️ เส้น",
-        help="เลือกโหมดการวาด/เพิ่มข้อความ"
-    )
-    mapping = {
-        "🖊️ เส้น": "freedraw",
-        "⬛ สี่เหลี่ยม": "rect",
-        "⚪ วงรี": "ellipse",
-        "↔️ เส้นตรง": "line",
-        "🔤 ข้อความ": "text",
-        "🧽 ลบ": "transform",
-    }
-    drawing_mode = mapping[mode]
-    st.caption("โหมดลบ: คลิกเลือกวัตถุ แล้วกดปุ่ม Backspace/Delete")
+json_data = st_canvas(
+    fill_color=fill_color if use_fill else None,
+    stroke_width=stroke_width,
+    stroke_color=stroke_color,
+    background_image=img_disp,
+    update_streamlit=True,
+    height=disp_h,
+    width=disp_w,
+    drawing_mode=mapping[mode],
+    key=f"canvas_{st.session_state.page_index}",
+    font_size=font_size,
+    initial_drawing={"version": "5.2.4", "objects": st.session_state.annos.get(st.session_state.page_index, [])},
+    display_toolbar=True,
+    background_color="rgba(0,0,0,0)"
+)
 
-with canvas_col:
-    json_data = st_canvas(
-        fill_color=fill_color,
-        stroke_width=stroke_width,
-        stroke_color=stroke_color,
-        background_image=img_disp,
-        update_streamlit=True,
-        height=disp_h,
-        width=disp_w,
-        drawing_mode=drawing_mode,
-        key=f"canvas_{st.session_state.page_index}",
-        display_toolbar=True,
-        initial_drawing={"version": "5.2.4", "objects": st.session_state.annos.get(st.session_state.page_index, [])},
-        background_color="rgba(0,0,0,0)",
-        font_size=font_size,
-    )
-
-# เก็บ annotation ของหน้านี้
 if json_data and "objects" in json_data:
     st.session_state.annos[st.session_state.page_index] = json_data["objects"]
-
-# ---------------------------
-# Footer
-# ---------------------------
-st.write("")
-st.markdown(
-    "<div class='subtle'>เคล็ดลับ: หากต้องการแก้ไขข้อความยาว ๆ ให้ใช้ตัวแปลง PDF → Word แล้วอัปโหลดกลับมา</div>",
-    unsafe_allow_html=True
-)
