@@ -1,11 +1,14 @@
 import streamlit as st
+import streamlit.components.v1 as components
 from PyPDF2 import PdfReader, PdfWriter, PdfMerger
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from PIL import Image
 import io
-import zipfile
+import json
+import base64
+import os
 
 # Import font module with error handling
 try:
@@ -17,178 +20,75 @@ except ImportError:
 
 # ตั้งค่าหน้าเว็บ
 st.set_page_config(
-    page_title="PDF Manager Pro",
+    page_title="PDF Manager Pro - Interactive",
     page_icon="📄",
     layout="wide"
 )
 
-# CSS สำหรับตกแต่ง
-st.markdown("""
-    <style>
-    .main {
-        padding: 2rem;
-    }
-    .stButton>button {
-        width: 100%;
-        background-color: #4CAF50;
-        color: white;
-        padding: 0.5rem;
-        border-radius: 5px;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# ฟังก์ชันสำหรับรวม PDF
-def merge_pdfs(pdf_files):
-    merger = PdfMerger()
-    for pdf in pdf_files:
-        merger.append(pdf)
-    
-    output = io.BytesIO()
-    merger.write(output)
-    merger.close()
-    output.seek(0)
-    return output
-
-# ฟังก์ชันสำหรับแบ่ง PDF
-def split_pdf(pdf_file, page_ranges):
-    reader = PdfReader(pdf_file)
-    outputs = []
-    
-    for i, page_range in enumerate(page_ranges):
-        writer = PdfWriter()
-        start, end = page_range
-        
-        for page_num in range(start - 1, min(end, len(reader.pages))):
-            writer.add_page(reader.pages[page_num])
-        
-        output = io.BytesIO()
-        writer.write(output)
-        output.seek(0)
-        outputs.append((f"split_{i+1}.pdf", output))
-    
-    return outputs
-
-# ฟังก์ชันสำหรับตัดหน้า PDF
-def extract_pages(pdf_file, pages_to_extract):
+# ฟังก์ชันสำหรับแก้ไข PDF ด้วย text elements
+def edit_pdf_with_elements(pdf_file, text_elements):
+    """สร้าง PDF ใหม่โดยเพิ่ม text overlay"""
     reader = PdfReader(pdf_file)
     writer = PdfWriter()
-    
-    for page_num in pages_to_extract:
-        if 0 < page_num <= len(reader.pages):
-            writer.add_page(reader.pages[page_num - 1])
-    
-    output = io.BytesIO()
-    writer.write(output)
-    output.seek(0)
-    return output
-
-# ฟังก์ชันสำหรับสร้าง PDF ใหม่พร้อมข้อความและรูปภาพ
-def create_pdf_with_content(text, font_name, font_size, image=None, image_position=None):
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
     
-    # ตั้งค่าฟอนต์
-    font_set = False
-    if FONTS_AVAILABLE and font_name in ["TH Sarabun PSK", "TH Sarabun New"]:
-        try:
-            font_file_map = {
-                "TH Sarabun PSK": ("THSarabunPSK", "fonts/THSarabunPSK.ttf"),
-                "TH Sarabun New": ("THSarabunNew", "fonts/THSarabunNew.ttf")
-            }
-            
-            if font_name in font_file_map:
-                font_id, font_path = font_file_map[font_name]
-                import os
-                if os.path.exists(font_path):
-                    pdfmetrics.registerFont(TTFont(font_id, font_path))
-                    c.setFont(font_id, font_size)
-                    font_set = True
-                else:
-                    st.warning(f"ไม่พบไฟล์ฟอนต์ {font_path}")
-        except Exception as e:
-            st.warning(f"ไม่สามารถโหลดฟอนต์ {font_name} ได้: {str(e)}")
-    
-    # ใช้ฟอนต์เริ่มต้นถ้าตั้งค่าฟอนต์ไม่สำเร็จ
-    if not font_set:
-        c.setFont('Helvetica', font_size)
-        if font_name != "Helvetica":
-            st.info("ใช้ฟอนต์เริ่มต้น (Helvetica) แทน")
-    
-    # เขียนข้อความ
-    if text:
-        text_object = c.beginText(50, height - 100)
-        for line in text.split('\n'):
-            text_object.textLine(line)
-        c.drawText(text_object)
-    
-    # เพิ่มรูปภาพ
-    if image is not None:
-        try:
-            img = Image.open(image)
-            img_width, img_height = img.size
-            
-            # ปรับขนาดรูปภาพ
-            max_width = 400
-            max_height = 400
-            ratio = min(max_width/img_width, max_height/img_height)
-            new_width = img_width * ratio
-            new_height = img_height * ratio
-            
-            if image_position:
-                x, y = image_position
-            else:
-                x, y = 50, height - 300
-            
-            c.drawImage(ImageReader(image), x, y - new_height, 
-                       width=new_width, height=new_height)
-        except Exception as e:
-            st.error(f"เกิดข้อผิดพลาดในการเพิ่มรูปภาพ: {str(e)}")
-    
-    c.save()
-    buffer.seek(0)
-    return buffer
-
-# ฟังก์ชันสำหรับแก้ไข PDF (เพิ่ม text overlay)
-def edit_pdf_with_text(pdf_file, page_number, text_elements):
-    reader = PdfReader(pdf_file)
-    writer = PdfWriter()
-    
-    # สร้าง overlay สำหรับหน้าที่ต้องการแก้ไข
-    packet = io.BytesIO()
-    can = canvas.Canvas(packet, pagesize=A4)
-    width, height = A4
-    
-    # เพิ่ม text elements
+    # จัดกลุ่ม elements ตามหน้า
+    elements_by_page = {}
     for element in text_elements:
-        text = element.get('text', '')
-        x = element.get('x', 50)
-        y = element.get('y', 700)
-        font_size = element.get('font_size', 12)
-        font_name = element.get('font_name', 'Helvetica')
+        page = element.get('page', 1)
+        if page not in elements_by_page:
+            elements_by_page[page] = []
+        elements_by_page[page].append(element)
+    
+    # ประมวลผลแต่ละหน้า
+    for page_num, page in enumerate(reader.pages, start=1):
+        if page_num in elements_by_page:
+            # สร้าง overlay สำหรับหน้านี้
+            packet = io.BytesIO()
+            can = canvas.Canvas(packet, pagesize=A4)
+            
+            for element in elements_by_page[page_num]:
+                text = element.get('text', '')
+                x = float(element.get('x', 50))
+                y = float(element.get('y', 700))
+                font_size = int(element.get('fontSize', 16))
+                font_name = element.get('font', 'Helvetica')
+                color = element.get('color', '#000000')
+                
+                # แปลงสี hex เป็น RGB
+                try:
+                    color = color.lstrip('#')
+                    r, g, b = tuple(int(color[i:i+2], 16)/255 for i in (0, 2, 4))
+                    can.setFillColorRGB(r, g, b)
+                except:
+                    can.setFillColorRGB(0, 0, 0)
+                
+                # ตั้งค่าฟอนต์
+                try:
+                    # ลองใช้ฟอนต์ไทยถ้ามี
+                    if font_name in ["THSarabunPSK", "THSarabunNew"] and FONTS_AVAILABLE:
+                        font_path = f"fonts/{font_name}.ttf"
+                        if os.path.exists(font_path):
+                            pdfmetrics.registerFont(TTFont(font_name, font_path))
+                            can.setFont(font_name, font_size)
+                        else:
+                            can.setFont('Helvetica', font_size)
+                    else:
+                        can.setFont(font_name, font_size)
+                except:
+                    can.setFont('Helvetica', font_size)
+                
+                # แปลง y coordinate (PDF ใช้ bottom-left เป็น origin)
+                y_pdf = height - y - font_size
+                can.drawString(x, y_pdf, text)
+            
+            can.save()
+            packet.seek(0)
+            
+            # รวม overlay กับหน้าต้นฉบับ
+            overlay_pdf = PdfReader(packet)
+            page.merge_page(overlay_pdf.pages[0])
         
-        # ตั้งค่าฟอนต์
-        try:
-            can.setFont(font_name, font_size)
-        except:
-            can.setFont('Helvetica', font_size)
-        
-        # แปลง y coordinate (PDF ใช้ bottom-left เป็น origin)
-        y_pdf = height - y
-        can.drawString(x, y_pdf, text)
-    
-    can.save()
-    packet.seek(0)
-    
-    # อ่าน overlay
-    overlay_pdf = PdfReader(packet)
-    overlay_page = overlay_pdf.pages[0]
-    
-    # รวม overlay กับหน้าต้นฉบับ
-    for i, page in enumerate(reader.pages):
-        if i == page_number - 1:
-            page.merge_page(overlay_page)
         writer.add_page(page)
     
     # สร้าง output
@@ -197,54 +97,509 @@ def edit_pdf_with_text(pdf_file, page_number, text_elements):
     output.seek(0)
     return output
 
-# ฟังก์ชันสำหรับหมุน PDF
-def rotate_pdf(pdf_file, rotation_angle):
-    reader = PdfReader(pdf_file)
-    writer = PdfWriter()
+# ฟังก์ชัน Interactive Editor Component
+def interactive_pdf_editor(pdf_file=None):
+    """แสดง Interactive PDF Editor"""
     
-    for page in reader.pages:
-        page.rotate(rotation_angle)
-        writer.add_page(page)
+    # แปลง PDF เป็น base64 ถ้ามี
+    pdf_base64 = ""
+    if pdf_file:
+        try:
+            pdf_bytes = pdf_file.read()
+            pdf_file.seek(0)
+            pdf_base64 = base64.b64encode(pdf_bytes).decode()
+        except:
+            pass
     
-    output = io.BytesIO()
-    writer.write(output)
-    output.seek(0)
-    return output
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{
+                font-family: 'Segoe UI', sans-serif;
+                background: #f5f5f5;
+                padding: 20px;
+            }}
+            .editor-container {{
+                max-width: 1200px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }}
+            .toolbar {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                padding: 20px;
+                border-radius: 10px 10px 0 0;
+                color: white;
+            }}
+            .toolbar h2 {{ margin-bottom: 15px; }}
+            .controls {{
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                gap: 10px;
+                margin-bottom: 15px;
+            }}
+            .controls input, .controls select {{
+                padding: 8px;
+                border: none;
+                border-radius: 5px;
+                font-size: 14px;
+            }}
+            textarea {{
+                width: 100%;
+                padding: 10px;
+                border: none;
+                border-radius: 5px;
+                resize: vertical;
+                min-height: 60px;
+                font-family: inherit;
+            }}
+            .btn {{
+                padding: 10px 20px;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                font-weight: 600;
+                transition: all 0.3s;
+            }}
+            .btn-add {{
+                background: white;
+                color: #667eea;
+                width: 100%;
+                margin-top: 10px;
+            }}
+            .btn-add:hover {{
+                background: #f0f0f0;
+            }}
+            .btn-save {{
+                background: #28a745;
+                color: white;
+                width: 100%;
+                margin-top: 10px;
+            }}
+            .btn-clear {{
+                background: #dc3545;
+                color: white;
+                width: 100%;
+            }}
+            .canvas-wrapper {{
+                padding: 20px;
+                min-height: 600px;
+                overflow: auto;
+            }}
+            #canvas {{
+                width: 595px;
+                height: 842px;
+                border: 2px solid #ddd;
+                margin: 0 auto;
+                position: relative;
+                background: white;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            }}
+            #pdfCanvas {{
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                pointer-events: none;
+            }}
+            .text-element {{
+                position: absolute;
+                cursor: move;
+                padding: 5px;
+                border: 2px dashed transparent;
+                user-select: none;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+                z-index: 10;
+            }}
+            .text-element:hover {{
+                border-color: #667eea;
+                background: rgba(102, 126, 234, 0.1);
+            }}
+            .text-element.selected {{
+                border-color: #667eea;
+                background: rgba(102, 126, 234, 0.15);
+            }}
+            .delete-btn {{
+                position: absolute;
+                top: -12px;
+                right: -12px;
+                width: 24px;
+                height: 24px;
+                background: #dc3545;
+                color: white;
+                border: none;
+                border-radius: 50%;
+                cursor: pointer;
+                display: none;
+                font-size: 14px;
+                line-height: 1;
+            }}
+            .text-element:hover .delete-btn {{
+                display: block;
+            }}
+            .resize-handle {{
+                position: absolute;
+                bottom: -5px;
+                right: -5px;
+                width: 12px;
+                height: 12px;
+                background: #667eea;
+                cursor: nwse-resize;
+                border-radius: 50%;
+                display: none;
+            }}
+            .text-element:hover .resize-handle {{
+                display: block;
+            }}
+            .info-box {{
+                background: #e7f3ff;
+                padding: 15px;
+                border-radius: 5px;
+                margin-bottom: 15px;
+                border-left: 4px solid #667eea;
+                color: #333;
+                font-weight: 500;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="editor-container">
+            <div class="toolbar">
+                <h2>✏️ PDF Interactive Editor</h2>
+                <div class="info-box">
+                    💡 <strong>วิธีใช้:</strong> พิมพ์ข้อความ → กด "เพิ่มข้อความ" → ลากวางตำแหน่ง → ลากมุมเพื่อปรับขนาด
+                </div>
+                
+                <textarea id="textInput" placeholder="พิมพ์ข้อความที่ต้องการเพิ่ม..."></textarea>
+                
+                <div class="controls">
+                    <select id="fontSelect">
+                        <option value="Helvetica">Helvetica</option>
+                        <option value="Times-Roman">Times New Roman</option>
+                        <option value="Courier">Courier</option>
+                        <option value="THSarabunPSK">TH Sarabun PSK</option>
+                        <option value="THSarabunNew">TH Sarabun New</option>
+                    </select>
+                    <input type="number" id="fontSize" value="16" min="8" max="72" placeholder="ขนาด">
+                    <input type="color" id="textColor" value="#000000">
+                </div>
+                
+                <button class="btn btn-add" onclick="addText()">➕ เพิ่มข้อความ</button>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <button class="btn btn-clear" onclick="clearAll()">🗑️ ล้างทั้งหมด</button>
+                    <button class="btn btn-save" onclick="savePDF()">💾 บันทึกและสร้าง PDF</button>
+                </div>
+            </div>
+            
+            <div class="canvas-wrapper">
+                <div id="canvas">
+                    <canvas id="pdfCanvas"></canvas>
+                </div>
+            </div>
+        </div>
 
-# ฟังก์ชันสำหรับลบหน้า PDF
-def delete_pages(pdf_file, pages_to_delete):
-    reader = PdfReader(pdf_file)
-    writer = PdfWriter()
-    
-    for i, page in enumerate(reader.pages, 1):
-        if i not in pages_to_delete:
-            writer.add_page(page)
-    
-    output = io.BytesIO()
-    writer.write(output)
-    output.seek(0)
-    return output
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+        <script>
+            let textElements = [];
+            let elementCounter = 0;
+            let selectedElement = null;
+            let isDragging = false;
+            let isResizing = false;
+            let startX, startY, startLeft, startTop, startFontSize;
 
-# Header
-st.title("📄 PDF Manager Pro")
-st.markdown("### จัดการไฟล์ PDF ได้ทุกอย่างในที่เดียว")
+            // โหลด PDF
+            const pdfData = '{pdf_base64}';
+            if (pdfData) {{
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                
+                const loadingTask = pdfjsLib.getDocument({{data: atob(pdfData)}});
+                loadingTask.promise.then(function(pdf) {{
+                    pdf.getPage(1).then(function(page) {{
+                        const canvas = document.getElementById('pdfCanvas');
+                        const context = canvas.getContext('2d');
+                        const viewport = page.getViewport({{scale: 1.0}});
+                        
+                        canvas.height = 842;
+                        canvas.width = 595;
+                        
+                        const renderContext = {{
+                            canvasContext: context,
+                            viewport: viewport
+                        }};
+                        page.render(renderContext);
+                    }});
+                }});
+            }}
 
-# Sidebar สำหรับเลือกฟีเจอร์
-st.sidebar.title("เลือกฟังก์ชัน")
+            function addText() {{
+                const text = document.getElementById('textInput').value;
+                if (!text.trim()) {{
+                    alert('กรุณาใส่ข้อความ');
+                    return;
+                }}
+
+                const element = {{
+                    id: ++elementCounter,
+                    text: text,
+                    x: 50,
+                    y: 50,
+                    fontSize: parseInt(document.getElementById('fontSize').value),
+                    font: document.getElementById('fontSelect').value,
+                    color: document.getElementById('textColor').value,
+                    page: 1
+                }};
+
+                textElements.push(element);
+                createTextElement(element);
+                document.getElementById('textInput').value = '';
+            }}
+
+            function createTextElement(el) {{
+                const canvas = document.getElementById('canvas');
+                const div = document.createElement('div');
+                div.className = 'text-element';
+                div.id = 'text-' + el.id;
+                div.style.left = el.x + 'px';
+                div.style.top = el.y + 'px';
+                div.style.fontSize = el.fontSize + 'px';
+                div.style.fontFamily = el.font;
+                div.style.color = el.color;
+                div.textContent = el.text;
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.textContent = '×';
+                deleteBtn.onclick = (e) => {{
+                    e.stopPropagation();
+                    deleteText(el.id);
+                }};
+                div.appendChild(deleteBtn);
+
+                const resizeHandle = document.createElement('div');
+                resizeHandle.className = 'resize-handle';
+                div.appendChild(resizeHandle);
+
+                div.addEventListener('mousedown', (e) => startDrag(e, el));
+                resizeHandle.addEventListener('mousedown', (e) => startResize(e, el));
+
+                canvas.appendChild(div);
+            }}
+
+            function startDrag(e, el) {{
+                if (e.target.className === 'resize-handle') return;
+                selectedElement = el;
+                isDragging = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                startLeft = el.x;
+                startTop = el.y;
+                
+                const div = document.getElementById('text-' + el.id);
+                div.classList.add('selected');
+            }}
+
+            function startResize(e, el) {{
+                e.stopPropagation();
+                selectedElement = el;
+                isResizing = true;
+                startY = e.clientY;
+                startFontSize = el.fontSize;
+            }}
+
+            document.addEventListener('mousemove', (e) => {{
+                if (isDragging && selectedElement) {{
+                    const dx = e.clientX - startX;
+                    const dy = e.clientY - startY;
+                    
+                    selectedElement.x = Math.max(0, Math.min(startLeft + dx, 550));
+                    selectedElement.y = Math.max(0, Math.min(startTop + dy, 800));
+                    
+                    const div = document.getElementById('text-' + selectedElement.id);
+                    div.style.left = selectedElement.x + 'px';
+                    div.style.top = selectedElement.y + 'px';
+                }}
+                
+                if (isResizing && selectedElement) {{
+                    const dy = e.clientY - startY;
+                    const newSize = Math.max(8, Math.min(72, startFontSize + dy));
+                    
+                    selectedElement.fontSize = newSize;
+                    const div = document.getElementById('text-' + selectedElement.id);
+                    div.style.fontSize = newSize + 'px';
+                }}
+            }});
+
+            document.addEventListener('mouseup', () => {{
+                if (selectedElement) {{
+                    const div = document.getElementById('text-' + selectedElement.id);
+                    div.classList.remove('selected');
+                }}
+                isDragging = false;
+                isResizing = false;
+                selectedElement = null;
+            }});
+
+            function deleteText(id) {{
+                textElements = textElements.filter(el => el.id !== id);
+                const div = document.getElementById('text-' + id);
+                if (div) div.remove();
+            }}
+
+            function clearAll() {{
+                if (confirm('ลบข้อความทั้งหมด?')) {{
+                    textElements.forEach(el => {{
+                        const div = document.getElementById('text-' + el.id);
+                        if (div) div.remove();
+                    }});
+                    textElements = [];
+                }}
+            }}
+
+            function savePDF() {{
+                if (textElements.length === 0) {{
+                    alert('กรุณาเพิ่มข้อความก่อน');
+                    return;
+                }}
+                
+                window.parent.postMessage({{
+                    type: 'pdf_data',
+                    elements: textElements
+                }}, '*');
+                
+                alert('✅ บันทึกข้อมูลสำเร็จ! กรุณากดปุ่ม "สร้าง PDF" ด้านล่าง');
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    
+    # แสดง component
+    components.html(html_code, height=1000, scrolling=True)
+
+# Main App
+st.title("📄 PDF Manager Pro - Interactive Edition")
+st.markdown("### แก้ไข PDF แบบมืออาชีพ - ลาก วาง ปรับขนาดได้อย่างอิสระ")
+
+# Sidebar
 feature = st.sidebar.radio(
-    "คุณต้องการทำอะไร?",
-    ["🔗 รวมไฟล์ PDF", "✂️ แบ่งไฟล์ PDF", "📋 ตัดหน้า PDF", 
-     "📝 สร้าง PDF ใหม่", "✏️ แก้ไข PDF", "🔄 หมุน PDF", "🗑️ ลบหน้า PDF"]
+    "เลือกฟังก์ชัน",
+    ["✏️ แก้ไข PDF (Interactive)", "🔗 รวมไฟล์ PDF"]
 )
 
-# 1. รวมไฟล์ PDF
-if feature == "🔗 รวมไฟล์ PDF":
+# Interactive PDF Editor
+if feature == "✏️ แก้ไข PDF (Interactive)":
+    st.header("✏️ แก้ไข PDF แบบ Interactive")
+    
+    uploaded_file = st.file_uploader("อัปโหลดไฟล์ PDF", type="pdf", key="edit_pdf")
+    
+    if uploaded_file:
+        # อ่านข้อมูล PDF
+        reader = PdfReader(uploaded_file)
+        total_pages = len(reader.pages)
+        
+        st.success(f"✅ อัปโหลดไฟล์สำเร็จ: {uploaded_file.name}")
+        st.info(f"📄 ไฟล์มี {total_pages} หน้า")
+        
+        # แสดง Interactive Editor พร้อม PDF
+        st.markdown("---")
+        st.subheader("🎨 Interactive Editor")
+        interactive_pdf_editor(uploaded_file)
+        
+        # รับข้อมูลจาก JavaScript
+        st.markdown("---")
+        st.subheader("📝 เพิ่มข้อมูลเพื่อสร้าง PDF")
+        
+        # Manual input สำหรับเพิ่มข้อมูล
+        with st.expander("➕ เพิ่มข้อความด้วยมือ (หรือใช้ Interactive Editor ด้านบน)", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                text = st.text_area("ข้อความ", key="manual_text")
+                x = st.number_input("ตำแหน่ง X", 0, 600, 50, key="manual_x")
+                y = st.number_input("ตำแหน่ง Y", 0, 800, 100, key="manual_y")
+            with col2:
+                font = st.selectbox("ฟอนต์", ["Helvetica", "Times-Roman", "Courier", "THSarabunPSK", "THSarabunNew"], key="manual_font")
+                size = st.number_input("ขนาด", 8, 72, 16, key="manual_size")
+                color = st.color_picker("สี", "#000000", key="manual_color")
+            
+            if st.button("➕ เพิ่มข้อความนี้"):
+                if text:
+                    if 'text_elements' not in st.session_state:
+                        st.session_state.text_elements = []
+                    st.session_state.text_elements.append({
+                        'text': text,
+                        'x': x,
+                        'y': y,
+                        'fontSize': size,
+                        'font': font,
+                        'color': color,
+                        'page': 1
+                    })
+                    st.success("✅ เพิ่มข้อความแล้ว!")
+                    st.rerun()
+        
+        # แสดงข้อมูลที่บันทึก
+        if 'text_elements' in st.session_state and st.session_state.text_elements:
+            st.markdown("---")
+            st.subheader("📋 ข้อความที่เพิ่มไว้")
+            
+            # แสดงรายการ
+            for i, el in enumerate(st.session_state.text_elements):
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.text(f"{i+1}. {el['text'][:50]}... (ตำแหน่ง: {el['x']}, {el['y']} | ขนาด: {el['fontSize']}px)")
+                with col2:
+                    if st.button("🗑️", key=f"del_{i}"):
+                        st.session_state.text_elements.pop(i)
+                        st.rerun()
+            
+            # แสดงข้อมูล JSON
+            with st.expander("📊 ดูข้อมูล JSON"):
+                st.json(st.session_state.text_elements)
+            
+            # ปุ่มสร้าง PDF
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🗑️ ล้างข้อมูลทั้งหมด", use_container_width=True):
+                    st.session_state.text_elements = []
+                    st.rerun()
+            with col2:
+                if st.button("🎨 สร้าง PDF", type="primary", use_container_width=True):
+                    with st.spinner("กำลังสร้าง PDF..."):
+                        try:
+                            edited_pdf = edit_pdf_with_elements(
+                                uploaded_file,
+                                st.session_state.text_elements
+                            )
+                            
+                            st.success("✅ สร้าง PDF สำเร็จ!")
+                            st.download_button(
+                                label="📥 ดาวน์โหลด PDF ที่แก้ไขแล้ว",
+                                data=edited_pdf,
+                                file_name="edited_" + uploaded_file.name,
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                        except Exception as e:
+                            st.error(f"❌ เกิดข้อผิดพลาด: {str(e)}")
+        else:
+            st.info("👆 ใช้ Interactive Editor ด้านบนเพื่อเพิ่มข้อความ หรือเพิ่มด้วยมือในส่วน 'เพิ่มข้อความด้วยมือ'")
+
+# รวมไฟล์ PDF
+elif feature == "🔗 รวมไฟล์ PDF":
     st.header("รวมหลาย PDF เป็นไฟล์เดียว")
     uploaded_files = st.file_uploader(
-        "อัปโหลดไฟล์ PDF (สามารถเลือกหลายไฟล์)",
+        "อัปโหลดไฟล์ PDF (หลายไฟล์)",
         type="pdf",
         accept_multiple_files=True,
-        key="merge"
+        key="merge_files"
     )
     
     if uploaded_files and len(uploaded_files) > 1:
@@ -252,335 +607,29 @@ if feature == "🔗 รวมไฟล์ PDF":
         
         if st.button("รวมไฟล์"):
             with st.spinner("กำลังรวมไฟล์..."):
-                merged_pdf = merge_pdfs(uploaded_files)
+                merger = PdfMerger()
+                for pdf in uploaded_files:
+                    merger.append(pdf)
+                
+                output = io.BytesIO()
+                merger.write(output)
+                merger.close()
+                output.seek(0)
+                
                 st.success("✅ รวมไฟล์สำเร็จ!")
                 st.download_button(
-                    label="📥 ดาวน์โหลดไฟล์ที่รวมแล้ว",
-                    data=merged_pdf,
+                    "📥 ดาวน์โหลดไฟล์ที่รวมแล้ว",
+                    data=output,
                     file_name="merged.pdf",
                     mime="application/pdf"
                 )
-
-# 2. แบ่งไฟล์ PDF
-elif feature == "✂️ แบ่งไฟล์ PDF":
-    st.header("แบ่ง PDF ตามช่วงหน้า")
-    uploaded_file = st.file_uploader("อัปโหลดไฟล์ PDF", type="pdf", key="split")
-    
-    if uploaded_file:
-        reader = PdfReader(uploaded_file)
-        total_pages = len(reader.pages)
-        st.info(f"ไฟล์นี้มี {total_pages} หน้า")
-        
-        num_splits = st.number_input("แบ่งเป็นกี่ส่วน?", min_value=1, max_value=10, value=2)
-        
-        page_ranges = []
-        cols = st.columns(num_splits)
-        for i in range(num_splits):
-            with cols[i]:
-                st.write(f"**ส่วนที่ {i+1}**")
-                start = st.number_input(f"หน้าเริ่มต้น", min_value=1, max_value=total_pages, value=1, key=f"start_{i}")
-                end = st.number_input(f"หน้าสุดท้าย", min_value=1, max_value=total_pages, value=total_pages, key=f"end_{i}")
-                page_ranges.append((start, end))
-        
-        if st.button("แบ่งไฟล์"):
-            with st.spinner("กำลังแบ่งไฟล์..."):
-                split_files = split_pdf(uploaded_file, page_ranges)
-                
-                # สร้าง ZIP file
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                    for filename, file_data in split_files:
-                        zip_file.writestr(filename, file_data.read())
-                
-                zip_buffer.seek(0)
-                st.success("✅ แบ่งไฟล์สำเร็จ!")
-                st.download_button(
-                    label="📥 ดาวน์โหลดไฟล์ทั้งหมด (ZIP)",
-                    data=zip_buffer,
-                    file_name="split_pdfs.zip",
-                    mime="application/zip"
-                )
-
-# 3. ตัดหน้า PDF
-elif feature == "📋 ตัดหน้า PDF":
-    st.header("เลือกหน้าที่ต้องการจาก PDF")
-    uploaded_file = st.file_uploader("อัปโหลดไฟล์ PDF", type="pdf", key="extract")
-    
-    if uploaded_file:
-        reader = PdfReader(uploaded_file)
-        total_pages = len(reader.pages)
-        st.info(f"ไฟล์นี้มี {total_pages} หน้า")
-        
-        pages_input = st.text_input(
-            "ระบุหน้าที่ต้องการ (เช่น 1,3,5-7)",
-            help="ใช้เครื่องหมายจุลภาค (,) สำหรับหน้าแยก และขีด (-) สำหรับช่วง"
-        )
-        
-        if pages_input and st.button("ตัดหน้า"):
-            try:
-                pages_to_extract = []
-                for part in pages_input.split(','):
-                    if '-' in part:
-                        start, end = map(int, part.split('-'))
-                        pages_to_extract.extend(range(start, end + 1))
-                    else:
-                        pages_to_extract.append(int(part.strip()))
-                
-                with st.spinner("กำลังตัดหน้า..."):
-                    extracted_pdf = extract_pages(uploaded_file, pages_to_extract)
-                    st.success(f"✅ ตัดหน้า {len(pages_to_extract)} หน้าสำเร็จ!")
-                    st.download_button(
-                        label="📥 ดาวน์โหลดไฟล์ที่ตัดแล้ว",
-                        data=extracted_pdf,
-                        file_name="extracted.pdf",
-                        mime="application/pdf"
-                    )
-            except Exception as e:
-                st.error(f"เกิดข้อผิดพลาด: {str(e)}")
-
-# 4. สร้าง PDF ใหม่
-elif feature == "📝 สร้าง PDF ใหม่":
-    st.header("สร้าง PDF พร้อมข้อความและรูปภาพ")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        text_content = st.text_area(
-            "เนื้อหาข้อความ",
-            height=200,
-            placeholder="พิมพ์ข้อความที่ต้องการใส่ใน PDF..."
-        )
-        
-        font_choice = st.selectbox(
-            "เลือกฟอนต์",
-            ["Helvetica", "TH Sarabun PSK", "TH Sarabun New"]
-        )
-        
-        font_size = st.slider("ขนาดตัวอักษร", 10, 40, 16)
-    
-    with col2:
-        uploaded_image = st.file_uploader(
-            "อัปโหลดรูปภาพ (ไม่บังคับ)",
-            type=['png', 'jpg', 'jpeg'],
-            key="create_image"
-        )
-        
-        if uploaded_image:
-            st.image(uploaded_image, caption="ภาพที่อัปโหลด", width=300)
-            
-            img_x = st.number_input("ตำแหน่ง X ของรูป", value=50)
-            img_y = st.number_input("ตำแหน่ง Y ของรูป", value=500)
-            image_position = (img_x, img_y)
-        else:
-            image_position = None
-    
-    if st.button("สร้าง PDF"):
-        if text_content or uploaded_image:
-            with st.spinner("กำลังสร้าง PDF..."):
-                pdf_output = create_pdf_with_content(
-                    text_content,
-                    font_choice,
-                    font_size,
-                    uploaded_image,
-                    image_position
-                )
-                st.success("✅ สร้าง PDF สำเร็จ!")
-                st.download_button(
-                    label="📥 ดาวน์โหลด PDF",
-                    data=pdf_output,
-                    file_name="new_document.pdf",
-                    mime="application/pdf"
-                )
-        else:
-            st.warning("กรุณาใส่ข้อความหรือรูปภาพอย่างน้อย 1 อย่าง")
-
-# 5. แก้ไข PDF
-elif feature == "✏️ แก้ไข PDF":
-    st.header("แก้ไข PDF - เพิ่มข้อความบนหน้า PDF")
-    
-    uploaded_file = st.file_uploader("อัปโหลดไฟล์ PDF", type="pdf", key="edit")
-    
-    if uploaded_file:
-        reader = PdfReader(uploaded_file)
-        total_pages = len(reader.pages)
-        st.info(f"📄 ไฟล์นี้มี {total_pages} หน้า")
-        
-        # เลือกหน้าที่ต้องการแก้ไข
-        page_to_edit = st.number_input(
-            "เลือกหน้าที่ต้องการแก้ไข",
-            min_value=1,
-            max_value=total_pages,
-            value=1
-        )
-        
-        st.markdown("---")
-        st.subheader(f"แก้ไขหน้าที่ {page_to_edit}")
-        
-        # เก็บ text elements ใน session state
-        if 'text_elements' not in st.session_state:
-            st.session_state.text_elements = []
-        
-        # UI สำหรับเพิ่ม text
-        with st.expander("➕ เพิ่มข้อความใหม่", expanded=True):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                new_text = st.text_area(
-                    "ข้อความ",
-                    placeholder="พิมพ์ข้อความที่ต้องการเพิ่ม...",
-                    key="new_text_input"
-                )
-                
-                text_x = st.number_input("ตำแหน่ง X (แนวนอน)", 
-                                        min_value=0, max_value=600, value=50)
-                text_y = st.number_input("ตำแหน่ง Y (แนวตั้ง)", 
-                                        min_value=0, max_value=800, value=100)
-            
-            with col2:
-                text_font = st.selectbox(
-                    "ฟอนต์",
-                    ["Helvetica", "TH Sarabun PSK", "TH Sarabun New"],
-                    key="text_font_select"
-                )
-                
-                text_size = st.slider("ขนาดตัวอักษร", 8, 72, 12, key="text_size_slider")
-            
-            if st.button("➕ เพิ่มข้อความนี้", use_container_width=True):
-                if new_text:
-                    st.session_state.text_elements.append({
-                        'text': new_text,
-                        'x': text_x,
-                        'y': text_y,
-                        'font_size': text_size,
-                        'font_name': text_font,
-                        'page': page_to_edit
-                    })
-                    st.success("✅ เพิ่มข้อความแล้ว!")
-                    st.rerun()
-                else:
-                    st.warning("กรุณาใส่ข้อความ")
-        
-        # แสดงรายการ text elements
-        if st.session_state.text_elements:
-            st.markdown("---")
-            st.subheader("📝 ข้อความที่เพิ่มไว้")
-            
-            page_elements = [e for e in st.session_state.text_elements if e.get('page') == page_to_edit]
-            
-            if page_elements:
-                for i, element in enumerate(page_elements):
-                    col1, col2 = st.columns([4, 1])
-                    
-                    with col1:
-                        st.text(f"{i+1}. {element['text'][:50]}...")
-                    
-                    with col2:
-                        if st.button("🗑️", key=f"delete_{i}"):
-                            global_idx = st.session_state.text_elements.index(element)
-                            st.session_state.text_elements.pop(global_idx)
-                            st.rerun()
-            
-            st.markdown("---")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("🔄 ล้างข้อความทั้งหมด", use_container_width=True):
-                    st.session_state.text_elements = []
-                    st.rerun()
-            
-            with col2:
-                if st.button("📥 สร้างและดาวน์โหลด PDF", 
-                           use_container_width=True, 
-                           type="primary"):
-                    elements_for_page = [e for e in st.session_state.text_elements 
-                                       if e.get('page') == page_to_edit]
-                    
-                    if elements_for_page:
-                        with st.spinner("กำลังสร้าง PDF..."):
-                            edited_pdf = edit_pdf_with_text(
-                                uploaded_file,
-                                page_to_edit,
-                                elements_for_page
-                            )
-                            
-                            st.success("✅ สร้าง PDF สำเร็จ!")
-                            st.download_button(
-                                label="📥 ดาวน์โหลดไฟล์ที่แก้ไขแล้ว",
-                                data=edited_pdf,
-                                file_name=f"edited_page_{page_to_edit}.pdf",
-                                mime="application/pdf"
-                            )
-                    else:
-                        st.warning("กรุณาเพิ่มข้อความอย่างน้อย 1 รายการ")
-
-# 6. หมุน PDF
-elif feature == "🔄 หมุน PDF":
-    st.header("หมุนหน้า PDF")
-    uploaded_file = st.file_uploader("อัปโหลดไฟล์ PDF", type="pdf", key="rotate")
-    
-    if uploaded_file:
-        rotation = st.selectbox(
-            "เลือกมุมการหมุน",
-            [90, 180, 270],
-            format_func=lambda x: f"{x}° (หมุนตามเข็มนาฬิกา)"
-        )
-        
-        if st.button("หมุนไฟล์"):
-            with st.spinner("กำลังหมุนไฟล์..."):
-                rotated_pdf = rotate_pdf(uploaded_file, rotation)
-                st.success("✅ หมุนไฟล์สำเร็จ!")
-                st.download_button(
-                    label="📥 ดาวน์โหลดไฟล์ที่หมุนแล้ว",
-                    data=rotated_pdf,
-                    file_name="rotated.pdf",
-                    mime="application/pdf"
-                )
-
-# 7. ลบหน้า PDF
-elif feature == "🗑️ ลบหน้า PDF":
-    st.header("ลบหน้าที่ไม่ต้องการออกจาก PDF")
-    uploaded_file = st.file_uploader("อัปโหลดไฟล์ PDF", type="pdf", key="delete")
-    
-    if uploaded_file:
-        reader = PdfReader(uploaded_file)
-        total_pages = len(reader.pages)
-        st.info(f"ไฟล์นี้มี {total_pages} หน้า")
-        
-        pages_to_delete_input = st.text_input(
-            "ระบุหน้าที่ต้องการลบ (เช่น 2,4,6-8)",
-            help="ใช้เครื่องหมายจุลภาค (,) สำหรับหน้าแยก และขีด (-) สำหรับช่วง"
-        )
-        
-        if pages_to_delete_input and st.button("ลบหน้า"):
-            try:
-                pages_to_delete = []
-                for part in pages_to_delete_input.split(','):
-                    if '-' in part:
-                        start, end = map(int, part.split('-'))
-                        pages_to_delete.extend(range(start, end + 1))
-                    else:
-                        pages_to_delete.append(int(part.strip()))
-                
-                with st.spinner("กำลังลบหน้า..."):
-                    result_pdf = delete_pages(uploaded_file, pages_to_delete)
-                    remaining_pages = total_pages - len(pages_to_delete)
-                    st.success(f"✅ ลบ {len(pages_to_delete)} หน้าสำเร็จ! เหลือ {remaining_pages} หน้า")
-                    st.download_button(
-                        label="📥 ดาวน์โหลดไฟล์ที่ลบหน้าแล้ว",
-                        data=result_pdf,
-                        file_name="deleted_pages.pdf",
-                        mime="application/pdf"
-                    )
-            except Exception as e:
-                st.error(f"เกิดข้อผิดพลาด: {str(e)}")
 
 # Footer
 st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666;'>
-        <p>พัฒนาด้วย ❤️ โดยใช้ Streamlit | © 2025 PDF Manager Pro</p>
+        <p>พัฒนาด้วย ❤️ โดยใช้ Streamlit | © 2025 PDF Manager Pro - Interactive Edition</p>
     </div>
     """,
     unsafe_allow_html=True
