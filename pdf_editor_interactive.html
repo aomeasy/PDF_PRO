@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Interactive Editor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 0;
+            min-height: 600px;
+        }
+
+        .sidebar {
+            background: #f8f9fa;
+            padding: 20px;
+            border-right: 2px solid #e0e0e0;
+        }
+
+        .tool-section {
+            margin-bottom: 25px;
+        }
+
+        .tool-section h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #666;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        input:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+            font-family: inherit;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 10px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .canvas-area {
+            padding: 30px;
+            background: #fff;
+            position: relative;
+        }
+
+        #pdf-canvas {
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            cursor: crosshair;
+            background: white;
+            max-width: 100%;
+            height: auto;
+        }
+
+        .text-element {
+            position: absolute;
+            cursor: move;
+            padding: 5px;
+            border: 2px dashed transparent;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .text-element:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .text-element.selected {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.15);
+        }
+
+        .text-element .delete-btn {
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            width: 24px;
+            height: 24px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: none;
+            font-size: 12px;
+            line-height: 1;
+        }
+
+        .text-element:hover .delete-btn {
+            display: block;
+        }
+
+        .resize-handle {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 15px;
+            height: 15px;
+            background: #667eea;
+            cursor: nwse-resize;
+            border-radius: 0 0 8px 0;
+            display: none;
+        }
+
+        .text-element:hover .resize-handle {
+            display: block;
+        }
+
+        .text-list {
+            margin-top: 20px;
+        }
+
+        .text-item {
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            border: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .text-item-content {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 0.9em;
+        }
+
+        .text-item button {
+            padding: 5px 10px;
+            margin-left: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.8em;
+        }
+
+        .preview-info {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .page-selector {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .page-selector button {
+            padding: 8px 15px;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .page-selector button:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        .page-info {
+            flex: 1;
+            text-align: center;
+            font-weight: 600;
+            color: #333;
+        }
+
+        @media (max-width: 968px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                border-right: none;
+                border-bottom: 2px solid #e0e0e0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✏️ PDF Interactive Editor</h1>
+            <p>แก้ไข PDF แบบมืออาชีพ - ลาก วาง ปรับขนาดได้อย่างอิสระ</p>
+        </div>
+
+        <div class="main-content">
+            <div class="sidebar">
+                <div class="tool-section">
+                    <h3>📝 เพิ่มข้อความ</h3>
+                    
+                    <div class="control-group">
+                        <label>ข้อความ</label>
+                        <textarea id="textInput" placeholder="พิมพ์ข้อความที่ต้องการเพิ่ม..."></textarea>
+                    </div>
+
+                    <div class="control-group">
+                        <label>ฟอนต์</label>
+                        <select id="fontSelect">
+                            <option value="Arial">Arial</option>
+                            <option value="Helvetica">Helvetica</option>
+                            <option value="Times New Roman">Times New Roman</option>
+                            <option value="Courier New">Courier New</option>
+                            <option value="Georgia">Georgia</option>
+                            <option value="Verdana">Verdana</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label>ขนาดตัวอักษร: <span id="fontSizeValue">16</span>px</label>
+                        <input type="range" id="fontSize" min="8" max="72" value="16" style="width: 100%">
+                    </div>
+
+                    <div class="control-group">
+                        <label>สี</label>
+                        <input type="color" id="textColor" value="#000000" style="width: 100%; height: 40px;">
+                    </div>
+
+                    <button class="btn btn-primary" onclick="addText()">➕ เพิ่มข้อความ</button>
+                </div>
+
+                <div class="tool-section">
+                    <h3>📋 ข้อความที่เพิ่มไว้</h3>
+                    <div id="textList" class="text-list">
+                        <p style="color: #999; font-size: 0.9em; text-align: center;">ยังไม่มีข้อความ</p>
+                    </div>
+                </div>
+
+                <div class="tool-section">
+                    <button class="btn btn-secondary" onclick="clearAll()">🗑️ ล้างทั้งหมด</button>
+                    <button class="btn btn-primary" onclick="downloadPDF()">📥 ดาวน์โหลด PDF</button>
+                </div>
+            </div>
+
+            <div class="canvas-area">
+                <div class="preview-info">
+                    <strong>💡 วิธีใช้งาน:</strong><br>
+                    • พิมพ์ข้อความและกด "เพิ่มข้อความ"<br>
+                    • คลิกและลากข้อความเพื่อย้ายตำแหน่ง<br>
+                    • ลากมุมล่างขวาเพื่อปรับขนาด<br>
+                    • คลิก X สีแดงเพื่อลบ
+                </div>
+
+                <div class="page-selector">
+                    <button onclick="previousPage()">◀ ก่อนหน้า</button>
+                    <div class="page-info">หน้า <span id="currentPage">1</span> / <span id="totalPages">1</span></div>
+                    <button onclick="nextPage()">ถัดไป ▶</button>
+                </div>
+
+                <div style="position: relative; display: inline-block;">
+                    <canvas id="pdf-canvas" width="595" height="842"></canvas>
+                    <div id="textContainer" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let textElements = [];
+        let currentPage = 1;
+        let totalPages = 1;
+        let selectedElement = null;
+        let isDragging = false;
+        let isResizing = false;
+        let startX, startY, startWidth, startHeight;
+
+        // อัพเดทค่า font size display
+        document.getElementById('fontSize').addEventListener('input', function() {
+            document.getElementById('fontSizeValue').textContent = this.value;
+        });
+
+        // Initialize canvas
+        function initCanvas() {
+            const canvas = document.getElementById('pdf-canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // วาดพื้นหลังสีขาว
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // วาดกรอบ
+            ctx.strokeStyle = '#e0e0e0';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(0, 0, canvas.width, canvas.height);
+            
+            // วาดข้อความ placeholder
+            ctx.fillStyle = '#cccccc';
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('คลิก "เพิ่มข้อความ" เพื่อเริ่มแก้ไข PDF', canvas.width/2, canvas.height/2);
+        }
+
+        // เพิ่มข้อความ
+        function addText() {
+            const text = document.getElementById('textInput').value;
+            if (!text) {
+                alert('กรุณาใส่ข้อความ');
+                return;
+            }
+
+            const font = document.getElementById('fontSelect').value;
+            const fontSize = document.getElementById('fontSize').value;
+            const color = document.getElementById('textColor').value;
+
+            const element = {
+                id: Date.now(),
+                text: text,
+                x: 50,
+                y: 50,
+                fontSize: fontSize,
+                font: font,
+                color: color,
+                page: currentPage
+            };
+
+            textElements.push(element);
+            createTextElement(element);
+            updateTextList();
+            
+            // Clear input
+            document.getElementById('textInput').value = '';
+        }
+
+        // สร้าง DOM element สำหรับข้อความ
+        function createTextElement(element) {
+            const container = document.getElementById('textContainer');
+            const div = document.createElement('div');
+            div.className = 'text-element';
+            div.id = 'text-' + element.id;
+            div.style.left = element.x + 'px';
+            div.style.top = element.y + 'px';
+            div.style.fontSize = element.fontSize + 'px';
+            div.style.fontFamily = element.font;
+            div.style.color = element.color;
+            div.textContent = element.text;
+
+            // ปุ่มลบ
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'delete-btn';
+            deleteBtn.textContent = '×';
+            deleteBtn.onclick = (e) => {
+                e.stopPropagation();
+                deleteText(element.id);
+            };
+            div.appendChild(deleteBtn);
+
+            // Resize handle
+            const resizeHandle = document.createElement('div');
+            resizeHandle.className = 'resize-handle';
+            div.appendChild(resizeHandle);
+
+            // Event listeners
+            div.addEventListener('mousedown', (e) => startDrag(e, element));
+            resizeHandle.addEventListener('mousedown', (e) => startResize(e, element));
+
+            container.appendChild(div);
+        }
+
+        // เริ่มการลาก
+        function startDrag(e, element) {
+            if (e.target.className === 'resize-handle') return;
+            
+            selectedElement = element;
+            isDragging = true;
+            
+            const div = document.getElementById('text-' + element.id);
+            div.classList.add('selected');
+            
+            startX = e.clientX - element.x;
+            startY = e.clientY - element.y;
+        }
+
+        // เริ่มการปรับขนาด
+        function startResize(e, element) {
+            e.stopPropagation();
+            selectedElement = element;
+            isResizing = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            startWidth = parseInt(element.fontSize);
+        }
+
+        // Event listeners สำหรับ mouse move และ mouse up
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging && selectedElement) {
+                const canvas = document.getElementById('pdf-canvas');
+                const rect = canvas.getBoundingClientRect();
+                
+                let newX = e.clientX - startX;
+                let newY = e.clientY - startY;
+                
+                // จำกัดไม่ให้ออกนอก canvas
+                newX = Math.max(0, Math.min(newX, rect.width - 50));
+                newY = Math.max(0, Math.min(newY, rect.height - 30));
+                
+                selectedElement.x = newX;
+                selectedElement.y = newY;
+                
+                const div = document.getElementById('text-' + selectedElement.id);
+                div.style.left = newX + 'px';
+                div.style.top = newY + 'px';
+            }
+            
+            if (isResizing && selectedElement) {
+                const deltaX = e.clientX - startX;
+                const newSize = Math.max(8, Math.min(72, startWidth + deltaX));
+                
+                selectedElement.fontSize = newSize;
+                const div = document.getElementById('text-' + selectedElement.id);
+                div.style.fontSize = newSize + 'px';
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isDragging || isResizing) {
+                updateTextList();
+            }
+            isDragging = false;
+            isResizing = false;
+            
+            if (selectedElement) {
+                const div = document.getElementById('text-' + selectedElement.id);
+                div.classList.remove('selected');
+                selectedElement = null;
+            }
+        });
+
+        // ลบข้อความ
+        function deleteText(id) {
+            textElements = textElements.filter(el => el.id !== id);
+            const div = document.getElementById('text-' + id);
+            if (div) div.remove();
+            updateTextList();
+        }
+
+        // อัพเดทรายการข้อความ
+        function updateTextList() {
+            const listDiv = document.getElementById('textList');
+            
+            if (textElements.length === 0) {
+                listDiv.innerHTML = '<p style="color: #999; font-size: 0.9em; text-align: center;">ยังไม่มีข้อความ</p>';
+                return;
+            }
+
+            listDiv.innerHTML = '';
+            textElements.forEach(el => {
+                const item = document.createElement('div');
+                item.className = 'text-item';
+                
+                const content = document.createElement('div');
+                content.className = 'text-item-content';
+                content.textContent = el.text.substring(0, 30) + (el.text.length > 30 ? '...' : '');
+                
+                const deleteBtn = document.createElement('button');
+                deleteBtn.textContent = '🗑️';
+                deleteBtn.style.background = '#dc3545';
+                deleteBtn.style.color = 'white';
+                deleteBtn.onclick = () => deleteText(el.id);
+                
+                item.appendChild(content);
+                item.appendChild(deleteBtn);
+                listDiv.appendChild(item);
+            });
+        }
+
+        // ล้างทั้งหมด
+        function clearAll() {
+            if (confirm('ต้องการลบข้อความทั้งหมดหรือไม่?')) {
+                textElements = [];
+                document.getElementById('textContainer').innerHTML = '';
+                updateTextList();
+            }
+        }
+
+        // ดาวน์โหลด PDF (จำลอง)
+        function downloadPDF() {
+            if (textElements.length === 0) {
+                alert('กรุณาเพิ่มข้อความก่อนดาวน์โหลด');
+                return;
+            }
+
+            // สร้าง JSON data
+            const pdfData = {
+                elements: textElements,
+                pageSize: {
+                    width: 595,
+                    height: 842
+                }
+            };
+
+            // แสดงข้อมูลที่จะส่งไป backend
+            console.log('PDF Data:', pdfData);
+            
+            alert('✅ สำเร็จ!\n\nข้อมูลพร้อมส่งไปยัง backend:\n' + 
+                  'จำนวนข้อความ: ' + textElements.length + ' รายการ\n\n' +
+                  'ในการใช้งานจริง ข้อมูลจะถูกส่งไปยัง Python backend เพื่อสร้าง PDF');
+
+            // ในการใช้งานจริง จะส่งข้อมูลไปยัง backend ด้วย fetch API
+            // fetch('/api/generate-pdf', {
+            //     method: 'POST',
+            //     headers: { 'Content-Type': 'application/json' },
+            //     body: JSON.stringify(pdfData)
+            // }).then(response => response.blob())
+            //   .then(blob => {
+            //       const url = window.URL.createObjectURL(blob);
+            //       const a = document.createElement('a');
+            //       a.href = url;
+            //       a.download = 'edited.pdf';
+            //       a.click();
+            //   });
+        }
+
+        // Navigation
+        function previousPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                updatePageDisplay();
+            }
+        }
+
+        function nextPage() {
+            if (currentPage < totalPages) {
+                currentPage++;
+                updatePageDisplay();
+            }
+        }
+
+        function updatePageDisplay() {
+            document.getElementById('currentPage').textContent = currentPage;
+            
+            // ซ่อน/แสดงข้อความตามหน้า
+            textElements.forEach(el => {
+                const div = document.getElementById('text-' + el.id);
+                if (div) {
+                    div.style.display = el.page === currentPage ? 'block' : 'none';
+                }
+            });
+        }
+
+        // Initialize
+        window.onload = function() {
+            initCanvas();
+            updateTextList();
+            document.getElementById('totalPages').textContent = totalPages;
+        };
+    </script>
+</body>
+</html>
