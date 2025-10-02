@@ -14,7 +14,7 @@ from PIL import Image
 # App Config
 # ---------------------------
 st.set_page_config(
-    page_title="PDF Editor — Minimal SPA",
+    page_title="PDF Editor — Minimal PRO",
     page_icon="📝",
     layout="wide",
     initial_sidebar_state="expanded"
