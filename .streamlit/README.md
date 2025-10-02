@@ -166,4 +166,33 @@ pip install -r requirements.txt
 
 ## 📝 License
 
-MIT License - ใช้
+MIT License - ใช้งานได้อย่างอิสระ
+
+## 🤝 การมีส่วนร่วม
+
+ยินดีรับ Pull Requests และ Issues ทุกรูปแบบ!
+
+1. Fork โปรเจค
+2. สร้าง Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit การเปลี่ยนแปลง (`git commit -m 'Add some AmazingFeature'`)
+4. Push ไปยัง Branch (`git push origin feature/AmazingFeature`)
+5. เปิด Pull Request
+
+## 👨‍💻 ผู้พัฒนา
+
+สร้างด้วย ❤️ โดยใช้ Streamlit
+
+## 📞 ติดต่อ
+
+- GitHub: [@yourusername](https://github.com/yourusername)
+- Email: your.email@example.com
+
+## 🙏 ขอบคุณ
+
+- [Streamlit](https://streamlit.io/) - สำหรับ web framework ที่ยอดเยี่ยม
+- [PyPDF2](https://pypdf2.readthedocs.io/) - สำหรับการจัดการ PDF
+- [ReportLab](https://www.reportlab.com/) - สำหรับการสร้าง PDF
+
+---
+
+⭐ ถ้าชอบโปรเจคนี้ กด Star ให้หน่อยนะ!
