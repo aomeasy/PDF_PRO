@@ -438,6 +438,13 @@ def interactive_pdf_editor(pdf_bytes: bytes | None = None):
     </body>
     </html>
     """
+    
+    # ใช้ .format() เพื่อแทรกตัวแปร Python
+    html = html_template.format(
+        pdf_base64=pdf_base64, 
+        custom_font_css=custom_font_css
+    )
+    
     return components.html(html, height=900, scrolling=True)
 
 # 3.3 Interactive Editor Page
