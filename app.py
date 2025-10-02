@@ -2,14 +2,20 @@ import streamlit as st
 from PyPDF2 import PdfReader, PdfWriter, PdfMerger
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfont import TTFont
 from reportlab.lib.utils import ImageReader
 from PIL import Image
 import io
 import os
 import tempfile
 import zipfile
+
+# Import font module with error handling
+try:
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfont import TTFont
+    FONTS_AVAILABLE = True
+except ImportError:
+    FONTS_AVAILABLE = False
 
 # ตั้งค่าหน้าเว็บ
 st.set_page_config(
